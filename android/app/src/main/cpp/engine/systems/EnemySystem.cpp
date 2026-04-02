@@ -23,6 +23,8 @@ EnemyRuntime makeEnemyInstance(
 ) {
     EnemyRuntime enemy;
     enemy.id = id;
+    enemy.archetype = blueprint.archetype;
+    enemy.archetypeId = std::string(enemyArchetypeIdName(blueprint.archetype));
     enemy.x = boardLeft + (static_cast<float>(spawnCol) + 0.5f) * tileSize;
     enemy.y = boardTop + (static_cast<float>(spawnRow) + 0.5f) * tileSize;
     enemy.prevX = enemy.x;

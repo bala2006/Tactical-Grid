@@ -188,69 +188,42 @@ class _GameShellState extends State<GameShell> {
                               child: Text(
                                 'Developer Controls',
                                 style: TextStyle(
-                                  fontSize: 14,
+                                  fontSize: 12,
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
                             ),
                             IconButton(
                               onPressed: () => Navigator.of(context).pop(),
-                              icon: const Icon(Icons.close_rounded, size: 16),
-                              splashRadius: 18,
+                              icon: const Icon(Icons.close_rounded, size: 14),
+                              splashRadius: 16,
                               constraints: const BoxConstraints.tightFor(
-                                width: 28,
-                                height: 28,
+                                width: 24,
+                                height: 24,
                               ),
                               padding: EdgeInsets.zero,
                             ),
                           ],
                         ),
-                        const SizedBox(height: 4),
-                        SwitchListTile(
-                          dense: true,
-                          visualDensity: const VisualDensity(
-                            horizontal: -2,
-                            vertical: -3,
-                          ),
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text(
-                            'Show FPS',
-                            style: TextStyle(fontSize: 13),
-                          ),
+                        const SizedBox(height: 2),
+                        _DevToggleRow(
+                          label: 'Show FPS',
                           value: config.devFlags.showFps,
                           onChanged: (_) {
                             widget.controller.toggleShowFps();
                             setState(() {});
                           },
                         ),
-                        SwitchListTile(
-                          dense: true,
-                          visualDensity: const VisualDensity(
-                            horizontal: -2,
-                            vertical: -3,
-                          ),
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text(
-                            'God Mode',
-                            style: TextStyle(fontSize: 13),
-                          ),
+                        _DevToggleRow(
+                          label: 'God Mode',
                           value: config.devFlags.godMode,
                           onChanged: (_) {
                             widget.controller.toggleGodMode();
                             setState(() {});
                           },
                         ),
-                        SwitchListTile(
-                          dense: true,
-                          visualDensity: const VisualDensity(
-                            horizontal: -2,
-                            vertical: -3,
-                          ),
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text(
-                            'Disable Tower Fire',
-                            style: TextStyle(fontSize: 13),
-                          ),
+                        _DevToggleRow(
+                          label: 'Disable Tower Fire',
                           value: config.devFlags.firingDisabled,
                           onChanged: (_) {
                             widget.controller.toggleFiringDisabled();
@@ -337,6 +310,45 @@ class _DialogCard extends StatelessWidget {
         border: Border.all(color: const Color(0x2E7A9CD2)),
       ),
       child: Padding(padding: const EdgeInsets.all(14), child: child),
+    );
+  }
+}
+
+class _DevToggleRow extends StatelessWidget {
+  const _DevToggleRow({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1.5),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Transform.scale(
+            scale: 0.82,
+            child: Switch(
+              value: value,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1,87 +1,126 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
 
 import '../domain/models.dart';
+import 'native_ffi_bindings.dart';
 
-const String _nativeControlChannelName = 'towerdefense/native_control';
-const String _nativeStateChannelName = 'towerdefense/native_state';
+export 'native_ffi_bindings.dart' show NativeAudioEvent, NativeSoundId;
+
 const String nativeBoardViewType = 'towerdefense/native_board';
+const int _bridgeMapIdCapacity = 32;
+const int _bridgeWaveStateCapacity = 32;
+const int _bridgeDefeatSummaryCapacity = 160;
+const int _bridgeSelectionStatusCapacity = 64;
+const int _bridgeSelectionTitleCapacity = 48;
+const int _bridgeUpgradeDeltaCapacity = 96;
+const int _bridgeDamageTextCapacity = 24;
+const int _bridgeDamageTypeCapacity = 24;
+const int _bridgeTargetingCapacity = 32;
+const int _bridgeEffectCapacity = 48;
+const int _bridgePlacementReasonCapacity = 96;
+const int _bridgePendingPlacementIdCapacity = 48;
+const int _bridgePendingPlacementTitleCapacity = 48;
+const int _bridgePendingPlacementStatusCapacity = 96;
 
 bool get supportsNativeGameBoard =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 class NativeGameBridge {
-  NativeGameBridge()
-    : _controlChannel = const MethodChannel(_nativeControlChannelName),
-      _stateChannel = const EventChannel(_nativeStateChannelName);
+  NativeGameBridge() : _bindings = NativeFfiBindings.instance;
 
-  final MethodChannel _controlChannel;
-  final EventChannel _stateChannel;
+  static const Duration _pollInterval = Duration(milliseconds: 16);
+
+  final NativeFfiBindings _bindings;
+  StreamController<NativeGameSnapshot>? _snapshotController;
+  Timer? _snapshotTimer;
+  NativeGameSnapshot? _latestSnapshot;
 
   Stream<NativeGameSnapshot> snapshots() {
-    return _stateChannel.receiveBroadcastStream().map((dynamic event) {
-      final String raw = event is String ? event : jsonEncode(event);
-      return NativeGameSnapshot.fromJson(
-        jsonDecode(raw) as Map<String, dynamic>,
-      );
-    });
-  }
-
-  Future<void> initialize() => _invoke('initialize');
-
-  Future<void> setScreen(String screenId) =>
-      _invoke('setScreen', <String, dynamic>{'screen': screenId});
-
-  Future<void> restart() => _invoke('restart');
-
-  Future<void> togglePause() => _invoke('togglePause');
-
-  Future<void> sellTower() => _invoke('sellTower');
-
-  Future<void> upgradeTower() => _invoke('upgradeTower');
-
-  Future<void> confirmPlacement() => _invoke('confirmPlacement');
-
-  Future<void> cancelPlacement() => _invoke('cancelPlacement');
-
-  Future<void> selectTower(String towerId) =>
-      _invoke('selectTower', <String, dynamic>{'towerId': towerId});
-
-  Future<void> setMap(String mapId) =>
-      _invoke('setMap', <String, dynamic>{'mapId': mapId});
-
-  Future<void> setDifficulty(Difficulty difficulty) => _invoke(
-    'setDifficulty',
-    <String, dynamic>{'difficulty': difficulty.index},
-  );
-
-  Future<void> setWaveMode(WaveMode waveMode) =>
-      _invoke('setWaveMode', <String, dynamic>{'waveMode': waveMode.index});
-
-  Future<void> setQuality(PerformanceQuality quality) => _invoke(
-    'setQuality',
-    <String, dynamic>{'quality': quality.index},
-  );
-
-  Future<void> setToggle(String action, bool value) =>
-      _invoke(action, <String, dynamic>{'value': value});
-
-  Future<bool> importMapString(String value) async {
-    final bool? result = await _controlChannel.invokeMethod<bool>(
-      'importMap',
-      <String, dynamic>{'value': value},
+    _snapshotController ??= StreamController<NativeGameSnapshot>.broadcast(
+      onListen: _startPolling,
+      onCancel: _stopPollingIfIdle,
     );
-    return result ?? false;
+    return _snapshotController!.stream;
   }
 
-  Future<String?> exportMapString() =>
-      _controlChannel.invokeMethod<String>('exportMap');
+  Future<void> initialize() async {
+    _emitSnapshot();
+    _startPolling();
+  }
 
-  Future<void> _invoke(String method, [Map<String, dynamic>? arguments]) async {
-    await _controlChannel.invokeMethod<void>(method, arguments);
+  Future<void> dispose() async {
+    _snapshotTimer?.cancel();
+    _snapshotTimer = null;
+    await _snapshotController?.close();
+  }
+
+  List<NativeAudioEvent> consumeAudioEvents() => _bindings.drainAudioEvents();
+
+  Future<void> setScreen(String screenId) async {
+    _bindings.setActiveScreen(_screenNameToId(screenId));
+    _emitSnapshot();
+  }
+
+  Future<void> restart() async => _invoke('restart');
+
+  Future<void> togglePause() async => _invoke('togglePause');
+
+  Future<void> sellTower() async => _invoke('sellTower');
+
+  Future<void> upgradeTower() async => _invoke('upgradeTower');
+
+  Future<void> confirmPlacement() async => _invoke('confirmPlacement');
+
+  Future<void> cancelPlacement() async => _invoke('cancelPlacement');
+
+  Future<void> selectTower(String towerId) async =>
+      _invoke('selectTower', towerId);
+
+  Future<void> setMap(String mapId) async => _invoke('setMap', mapId);
+
+  Future<void> setDifficulty(Difficulty difficulty) async =>
+      _invoke('setDifficulty', difficulty.index.toString());
+
+  Future<void> setWaveMode(WaveMode waveMode) async =>
+      _invoke('setWaveMode', waveMode.index.toString());
+
+  Future<void> setQuality(PerformanceQuality quality) async =>
+      _invoke('setQuality', quality.index.toString());
+
+  Future<void> setToggle(String action, bool value) async =>
+      _invoke(action, value.toString());
+
+  Future<bool> importMapString(String value) async =>
+      _invoke('importMap', value.trim());
+
+  Future<String?> exportMapString() async => _latestSnapshot?.exportMap;
+
+  void _startPolling() {
+    _snapshotTimer ??= Timer.periodic(_pollInterval, (_) => _emitSnapshot());
+  }
+
+  void _stopPollingIfIdle() {
+    if (_snapshotController?.hasListener ?? false) {
+      return;
+    }
+    _snapshotTimer?.cancel();
+    _snapshotTimer = null;
+  }
+
+  bool _invoke(String actionId, [String payload = '']) {
+    final bool result = _bindings.invokeAction(actionId, payload);
+    _emitSnapshot();
+    return result;
+  }
+
+  void _emitSnapshot() {
+    final NativeGameSnapshot next = NativeGameSnapshot.fromStruct(
+      _bindings.readSnapshot(),
+    );
+    _latestSnapshot = next;
+    _snapshotController?.add(next);
   }
 }
 
@@ -102,43 +141,30 @@ class NativeGameSnapshot {
     required this.exportMap,
   });
 
-  factory NativeGameSnapshot.fromJson(Map<String, dynamic> json) {
+  factory NativeGameSnapshot.fromStruct(NativeGameSnapshotStruct value) {
+    final NativeSelectionSnapshotStruct selection = value.selection;
+    final NativePendingPlacementSnapshotStruct pending = value.pendingPlacement;
     return NativeGameSnapshot(
-      runId: (json['runId'] as num?)?.toInt() ?? 0,
-      tick: (json['tick'] as num?)?.toInt() ?? 0,
-      simTimeMs: (json['simTimeMs'] as num?)?.toDouble() ?? 0,
-      activeScreen: _screenIdToName((json['activeScreen'] as num?)?.toInt() ?? 0),
-      hud: NativeHudState.fromJson(
-        (json['hud'] as Map<String, dynamic>? ?? <String, dynamic>{}),
-      ),
-      selection: json['selection'] == null
+      runId: value.runId,
+      tick: value.tick,
+      simTimeMs: value.simTimeMs.toDouble(),
+      activeScreen: _screenIdToName(value.activeScreen),
+      hud: NativeHudState.fromStruct(value.hud),
+      selection: selection.present == 0
           ? null
-          : NativeSelectionInfo.fromJson(
-              (json['selection'] as Map<String, dynamic>),
-            ),
-      pendingPlacement: json['pendingPlacement'] == null
+          : NativeSelectionInfo.fromStruct(selection),
+      pendingPlacement: pending.present == 0
           ? null
-          : NativePendingPlacementInfo.fromJson(
-              json['pendingPlacement'] as Map<String, dynamic>,
-            ),
-      performance: NativePerfStats.fromJson(
-        (json['perf'] as Map<String, dynamic>? ?? <String, dynamic>{}),
+          : NativePendingPlacementInfo.fromStruct(pending),
+      performance: NativePerfStats.fromStruct(value.perf),
+      runStats: NativeRunStats.fromStruct(value.runStats),
+      defeatVisible: value.defeatVisible != 0,
+      defeatSummary: readNativeString(
+        value.defeatSummary,
+        _bridgeDefeatSummaryCapacity,
       ),
-      runStats: NativeRunStats.fromJson(
-        (json['runStats'] as Map<String, dynamic>? ?? <String, dynamic>{}),
-      ),
-      defeatVisible:
-          ((json['defeat'] as Map<String, dynamic>? ?? <String, dynamic>{})['visible']
-              as bool?) ??
-          false,
-      defeatSummary:
-          ((json['defeat'] as Map<String, dynamic>? ?? <String, dynamic>{})['summary']
-              as String?) ??
-          '',
-      config: NativeConfigState.fromJson(
-        (json['config'] as Map<String, dynamic>? ?? <String, dynamic>{}),
-      ),
-      exportMap: json['exportMap'] as String?,
+      config: NativeConfigState.fromStruct(value.config),
+      exportMap: readNativeString(value.exportMap, _bridgeMapIdCapacity),
     );
   }
 
@@ -168,15 +194,15 @@ class NativeHudState {
     required this.paused,
   });
 
-  factory NativeHudState.fromJson(Map<String, dynamic> json) {
+  factory NativeHudState.fromStruct(NativeHudSnapshotStruct value) {
     return NativeHudState(
-      health: (json['health'] as num?)?.toInt() ?? 0,
-      maxHealth: (json['maxHealth'] as num?)?.toInt() ?? 0,
-      cash: (json['cash'] as num?)?.toInt() ?? 0,
-      wave: (json['wave'] as num?)?.toInt() ?? 0,
-      kills: (json['kills'] as num?)?.toInt() ?? 0,
-      waveState: json['waveState'] as String? ?? 'Idle',
-      paused: json['paused'] as bool? ?? true,
+      health: value.health,
+      maxHealth: value.maxHealth,
+      cash: value.cash,
+      wave: value.wave,
+      kills: value.kills,
+      waveState: readNativeString(value.waveState, _bridgeWaveStateCapacity),
+      paused: value.paused != 0,
     );
   }
 
@@ -210,28 +236,34 @@ class NativeSelectionInfo {
     required this.canUpgrade,
   });
 
-  factory NativeSelectionInfo.fromJson(Map<String, dynamic> json) {
-    final int titleColor = (json['titleColor'] as num?)?.toInt() ?? 0xFFFFFFFF;
+  factory NativeSelectionInfo.fromStruct(NativeSelectionSnapshotStruct value) {
     return NativeSelectionInfo(
-      status: json['status'] as String? ?? 'Selected: None',
-      title: json['title'] as String? ?? '',
-      titleColor: Color(titleColor),
-      cost: (json['cost'] as num?)?.toDouble() ?? 0,
-      sellPrice: (json['sellPrice'] as num?)?.toDouble() ?? 0,
-      upgradePrice: json['upgradePrice'] == null
-          ? null
-          : (json['upgradePrice'] as num).toDouble(),
-      upgradeDelta: json['upgradeDelta'] as String? ?? 'No more upgrades',
-      damage: json['damage'] as String? ?? '',
-      dps: (json['dps'] as num?)?.toDouble() ?? 0,
-      damageTypeLabel: json['damageTypeLabel'] as String? ?? '',
-      range: (json['range'] as num?)?.toDouble() ?? 0,
-      cooldownSeconds: (json['cooldownSeconds'] as num?)?.toDouble() ?? 0,
-      targeting: json['targeting'] as String? ?? '',
-      effect: json['effect'] as String? ?? '',
-      placementReason: json['placementReason'] as String? ?? '',
-      canSell: json['canSell'] as bool? ?? false,
-      canUpgrade: json['canUpgrade'] as bool? ?? false,
+      status: readNativeString(value.status, _bridgeSelectionStatusCapacity),
+      title: readNativeString(value.title, _bridgeSelectionTitleCapacity),
+      titleColor: Color(value.titleColor),
+      cost: value.cost,
+      sellPrice: value.sellPrice,
+      upgradePrice: value.hasUpgradePrice == 0 ? null : value.upgradePrice,
+      upgradeDelta: readNativeString(
+        value.upgradeDelta,
+        _bridgeUpgradeDeltaCapacity,
+      ),
+      damage: readNativeString(value.damage, _bridgeDamageTextCapacity),
+      dps: value.dps,
+      damageTypeLabel: readNativeString(
+        value.damageTypeLabel,
+        _bridgeDamageTypeCapacity,
+      ),
+      range: value.range,
+      cooldownSeconds: value.cooldownSeconds,
+      targeting: readNativeString(value.targeting, _bridgeTargetingCapacity),
+      effect: readNativeString(value.effect, _bridgeEffectCapacity),
+      placementReason: readNativeString(
+        value.placementReason,
+        _bridgePlacementReasonCapacity,
+      ),
+      canSell: value.canSell != 0,
+      canUpgrade: value.canUpgrade != 0,
     );
   }
 
@@ -261,15 +293,33 @@ class NativePendingPlacementInfo {
     required this.cost,
     required this.anchorX,
     required this.anchorY,
+    required this.placementAllowed,
+    required this.placementAffordable,
+    required this.showPlaceAction,
+    required this.remainingTicks,
+    required this.statusText,
   });
 
-  factory NativePendingPlacementInfo.fromJson(Map<String, dynamic> json) {
+  factory NativePendingPlacementInfo.fromStruct(
+    NativePendingPlacementSnapshotStruct value,
+  ) {
     return NativePendingPlacementInfo(
-      id: json['id'] as String? ?? '',
-      title: json['title'] as String? ?? '',
-      cost: (json['cost'] as num?)?.toDouble() ?? 0,
-      anchorX: (json['anchorX'] as num?)?.toDouble() ?? 0,
-      anchorY: (json['anchorY'] as num?)?.toDouble() ?? 0,
+      id: readNativeString(value.id, _bridgePendingPlacementIdCapacity),
+      title: readNativeString(
+        value.title,
+        _bridgePendingPlacementTitleCapacity,
+      ),
+      cost: value.cost,
+      anchorX: value.anchorX,
+      anchorY: value.anchorY,
+      placementAllowed: value.placementAllowed != 0,
+      placementAffordable: value.placementAffordable != 0,
+      showPlaceAction: value.showPlaceAction != 0,
+      remainingTicks: value.remainingTicks,
+      statusText: readNativeString(
+        value.statusText,
+        _bridgePendingPlacementStatusCapacity,
+      ),
     );
   }
 
@@ -278,6 +328,11 @@ class NativePendingPlacementInfo {
   final double cost;
   final double anchorX;
   final double anchorY;
+  final bool placementAllowed;
+  final bool placementAffordable;
+  final bool showPlaceAction;
+  final int remainingTicks;
+  final String statusText;
 }
 
 class NativePerfStats {
@@ -288,12 +343,12 @@ class NativePerfStats {
     required this.quality,
   });
 
-  factory NativePerfStats.fromJson(Map<String, dynamic> json) {
+  factory NativePerfStats.fromStruct(NativePerfSnapshotStruct value) {
     return NativePerfStats(
-      show: json['show'] as bool? ?? false,
-      fps: (json['fps'] as num?)?.toDouble() ?? 0,
-      frameTimeMs: (json['frameTimeMs'] as num?)?.toDouble() ?? 0,
-      quality: json['quality'] as String? ?? PerformanceQuality.high.name,
+      show: value.show != 0,
+      fps: value.fps,
+      frameTimeMs: value.frameTimeMs,
+      quality: _qualityIdToName(value.quality),
     );
   }
 
@@ -311,12 +366,12 @@ class NativeRunStats {
     required this.totalDamage,
   });
 
-  factory NativeRunStats.fromJson(Map<String, dynamic> json) {
+  factory NativeRunStats.fromStruct(NativeRunStatsSnapshotStruct value) {
     return NativeRunStats(
-      built: (json['built'] as num?)?.toInt() ?? 0,
-      kills: (json['kills'] as num?)?.toInt() ?? 0,
-      leaks: (json['leaks'] as num?)?.toInt() ?? 0,
-      totalDamage: (json['totalDamage'] as num?)?.toDouble() ?? 0,
+      built: value.built,
+      kills: value.kills,
+      leaks: value.leaks,
+      totalDamage: value.totalDamage,
     );
   }
 
@@ -343,21 +398,21 @@ class NativeConfigState {
     required this.zoom,
   });
 
-  factory NativeConfigState.fromJson(Map<String, dynamic> json) {
+  factory NativeConfigState.fromStruct(NativeConfigSnapshotStruct value) {
     return NativeConfigState(
-      mapId: json['mapId'] as String? ?? 'sparse2',
-      difficulty: (json['difficulty'] as num?)?.toInt() ?? 1,
-      waveMode: (json['waveMode'] as num?)?.toInt() ?? 0,
-      quality: (json['quality'] as num?)?.toInt() ?? 0,
-      effects: json['effects'] as bool? ?? true,
-      healthBars: json['healthBars'] as bool? ?? true,
-      muted: json['muted'] as bool? ?? false,
-      autoSend: json['autoSend'] as bool? ?? false,
-      adaptiveQuality: json['adaptiveQuality'] as bool? ?? true,
-      showFps: json['showFps'] as bool? ?? false,
-      godMode: json['godMode'] as bool? ?? false,
-      firingDisabled: json['firingDisabled'] as bool? ?? false,
-      zoom: (json['zoom'] as num?)?.toInt() ?? 18,
+      mapId: readNativeString(value.mapId, _bridgeMapIdCapacity),
+      difficulty: value.difficulty,
+      waveMode: value.waveMode,
+      quality: value.quality,
+      effects: value.effects != 0,
+      healthBars: value.healthBars != 0,
+      muted: value.muted != 0,
+      autoSend: value.autoSend != 0,
+      adaptiveQuality: value.adaptiveQuality != 0,
+      showFps: value.showFps != 0,
+      godMode: value.godMode != 0,
+      firingDisabled: value.firingDisabled != 0,
+      zoom: value.zoom,
     );
   }
 
@@ -388,5 +443,31 @@ String _screenIdToName(int screenId) {
       return 'leaderboard';
     default:
       return 'home';
+  }
+}
+
+int _screenNameToId(String value) {
+  switch (value) {
+    case 'map':
+      return 1;
+    case 'settings':
+      return 2;
+    case 'game':
+      return 3;
+    case 'leaderboard':
+      return 4;
+    default:
+      return 0;
+  }
+}
+
+String _qualityIdToName(int qualityId) {
+  switch (qualityId) {
+    case 1:
+      return PerformanceQuality.balanced.name;
+    case 2:
+      return PerformanceQuality.battery.name;
+    default:
+      return PerformanceQuality.high.name;
   }
 }

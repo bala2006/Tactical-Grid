@@ -87,6 +87,8 @@ class GameController extends ChangeNotifier {
   final Paint _strokePaint = Paint()..style = PaintingStyle.stroke;
   final Paint _effectPaint = Paint();
   final Paint _gradientPaint = Paint();
+  final Map<NativeSoundId, AudioPool> _nativeAudioPools =
+      <NativeSoundId, AudioPool>{};
   StreamSubscription<NativeGameSnapshot>? _nativeSnapshotSubscription;
   NativeGameBridge? _nativeBridge;
   int _lastNativeRunId = -1;
@@ -146,7 +148,8 @@ class GameController extends ChangeNotifier {
   ui.Picture? _enemyArrowPicture;
   ui.Picture? _enemyTankPicture;
   ui.Picture? _enemyTauntPicture;
-  final Map<TowerKind, ui.Picture> _towerBodyPictures = <TowerKind, ui.Picture>{};
+  final Map<TowerKind, ui.Picture> _towerBodyPictures =
+      <TowerKind, ui.Picture>{};
   GridPoint? _previewTile;
   String _placementMessage = '';
   TowerKind? _placingTowerKind;
@@ -196,10 +199,15 @@ class GameController extends ChangeNotifier {
     _publishShellState(force: true);
     try {
       if (isNativeBoardEnabled) {
+        FlameAudio.audioCache.prefix = '';
         _nativeBridge = NativeGameBridge();
-        _nativeSnapshotSubscription = _nativeBridge!.snapshots().listen(
-          _handleNativeSnapshot,
-        );
+        await _initializeNativeAudio();
+        _nativeSnapshotSubscription = _nativeBridge!.snapshots().listen((
+          NativeGameSnapshot snapshot,
+        ) {
+          _handleNativeSnapshot(snapshot);
+          _drainNativeAudioEvents();
+        });
         await _nativeBridge!.initialize();
         _initialized = true;
         _loadError = null;
@@ -622,7 +630,8 @@ class GameController extends ChangeNotifier {
 
   Future<bool> importMapString(String value) async {
     if (isNativeBoardEnabled) {
-      return await (_nativeBridge?.importMapString(value) ?? Future.value(false));
+      return await (_nativeBridge?.importMapString(value) ??
+          Future.value(false));
     }
     try {
       final MapDefinition decoded = _mapCatalog!.decodeCompressedMap(
@@ -662,7 +671,8 @@ class GameController extends ChangeNotifier {
   }
 
   void _publishShellState({bool force = false}) {
-    final String signature = '$_activeScreen|$_initializing|${_loadError ?? ''}';
+    final String signature =
+        '$_activeScreen|$_initializing|${_loadError ?? ''}';
     if (!force && signature == _shellSignature) {
       return;
     }
@@ -680,10 +690,12 @@ class GameController extends ChangeNotifier {
     if (_config.adaptiveQuality) {
       if (_smoothedFrameTimeMs > 24 &&
           _resolvedQuality.index < PerformanceQuality.values.length - 1) {
-        _resolvedQuality = PerformanceQuality.values[_resolvedQuality.index + 1];
+        _resolvedQuality =
+            PerformanceQuality.values[_resolvedQuality.index + 1];
       } else if (_smoothedFrameTimeMs < 17 &&
           _resolvedQuality.index > _config.quality.index) {
-        _resolvedQuality = PerformanceQuality.values[_resolvedQuality.index - 1];
+        _resolvedQuality =
+            PerformanceQuality.values[_resolvedQuality.index - 1];
       } else if (_smoothedFrameTimeMs < 15) {
         _resolvedQuality = _config.quality;
       }
@@ -730,6 +742,7 @@ class GameController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     unawaited(_nativeSnapshotSubscription?.cancel() ?? Future<void>.value());
+    unawaited(_nativeBridge?.dispose() ?? Future<void>.value());
     shellStateListenable.dispose();
     uiStateListenable.dispose();
     configListenable.dispose();
@@ -761,10 +774,11 @@ class GameController extends ChangeNotifier {
     _performance = PerformanceStats(
       fps: snapshot.performance.fps,
       frameTimeMs: snapshot.performance.frameTimeMs,
-      quality: PerformanceQuality.values[snapshot.config.quality.clamp(
-        0,
-        PerformanceQuality.values.length - 1,
-      )],
+      quality:
+          PerformanceQuality.values[snapshot.config.quality.clamp(
+            0,
+            PerformanceQuality.values.length - 1,
+          )],
       activeEnemies: 0,
       activeTowers: 0,
       activeMissiles: 0,
@@ -776,23 +790,26 @@ class GameController extends ChangeNotifier {
     );
     _config = GameConfig(
       mapSelection: snapshot.config.mapId,
-      difficulty: Difficulty.values[snapshot.config.difficulty.clamp(
-        0,
-        Difficulty.values.length - 1,
-      )],
-      waveMode: WaveMode.values[snapshot.config.waveMode.clamp(
-        0,
-        WaveMode.values.length - 1,
-      )],
+      difficulty:
+          Difficulty.values[snapshot.config.difficulty.clamp(
+            0,
+            Difficulty.values.length - 1,
+          )],
+      waveMode:
+          WaveMode.values[snapshot.config.waveMode.clamp(
+            0,
+            WaveMode.values.length - 1,
+          )],
       muted: snapshot.config.muted,
       effectsEnabled: snapshot.config.effects,
       healthBars: snapshot.config.healthBars,
       autoSend: snapshot.config.autoSend,
       adaptiveQuality: snapshot.config.adaptiveQuality,
-      quality: PerformanceQuality.values[snapshot.config.quality.clamp(
-        0,
-        PerformanceQuality.values.length - 1,
-      )],
+      quality:
+          PerformanceQuality.values[snapshot.config.quality.clamp(
+            0,
+            PerformanceQuality.values.length - 1,
+          )],
       devFlags: DevFlags(
         showFps: snapshot.config.showFps,
         godMode: snapshot.config.godMode,
@@ -812,8 +829,7 @@ class GameController extends ChangeNotifier {
       health: snapshot.hud.health,
       maxHealth: snapshot.hud.maxHealth,
       cash: snapshot.hud.cash,
-      selectionStatus:
-          snapshot.selection?.status ?? 'Selected: None',
+      selectionStatus: snapshot.selection?.status ?? 'Selected: None',
       threatLabel: 'Threat: Native',
       pills: <String>[],
       selectionInfo: snapshot.selection == null
@@ -844,6 +860,12 @@ class GameController extends ChangeNotifier {
               cost: snapshot.pendingPlacement!.cost,
               anchorX: snapshot.pendingPlacement!.anchorX,
               anchorY: snapshot.pendingPlacement!.anchorY,
+              placementAllowed: snapshot.pendingPlacement!.placementAllowed,
+              placementAffordable:
+                  snapshot.pendingPlacement!.placementAffordable,
+              showPlaceAction: snapshot.pendingPlacement!.showPlaceAction,
+              remainingTicks: snapshot.pendingPlacement!.remainingTicks,
+              statusText: snapshot.pendingPlacement!.statusText,
             ),
       runStats: _runStats,
       isPaused: snapshot.hud.paused,
@@ -874,5 +896,53 @@ class GameController extends ChangeNotifier {
         soundAsset('taunt.wav'),
       ]);
     } catch (_) {}
+  }
+
+  Future<void> _initializeNativeAudio() async {
+    try {
+      _nativeAudioPools[NativeSoundId.boom] = await FlameAudio.createPool(
+        soundAsset('boom.wav'),
+        maxPlayers: 4,
+      );
+      _nativeAudioPools[NativeSoundId.missile] = await FlameAudio.createPool(
+        soundAsset('missile.wav'),
+        maxPlayers: 4,
+      );
+      _nativeAudioPools[NativeSoundId.pop] = await FlameAudio.createPool(
+        soundAsset('pop.wav'),
+        maxPlayers: 6,
+      );
+      _nativeAudioPools[NativeSoundId.railgun] = await FlameAudio.createPool(
+        soundAsset('railgun.wav'),
+        maxPlayers: 3,
+      );
+      _nativeAudioPools[NativeSoundId.sniper] = await FlameAudio.createPool(
+        soundAsset('sniper.wav'),
+        maxPlayers: 3,
+      );
+      _nativeAudioPools[NativeSoundId.spark] = await FlameAudio.createPool(
+        soundAsset('spark.wav'),
+        maxPlayers: 5,
+      );
+      _nativeAudioPools[NativeSoundId.taunt] = await FlameAudio.createPool(
+        soundAsset('taunt.wav'),
+        maxPlayers: 3,
+      );
+    } catch (_) {}
+  }
+
+  void _drainNativeAudioEvents() {
+    final NativeGameBridge? bridge = _nativeBridge;
+    if (bridge == null || _config.muted) {
+      bridge?.consumeAudioEvents();
+      return;
+    }
+    for (final event in bridge.consumeAudioEvents()) {
+      final AudioPool? pool = _nativeAudioPools[event.soundId];
+      if (pool == null) {
+        continue;
+      }
+      unawaited(pool.start(volume: event.volume.clamp(0, 1).toDouble()));
+    }
   }
 }

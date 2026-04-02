@@ -67,6 +67,7 @@ float enemyProgressScore(
 
 TowerRuntime makeTowerRuntime(std::string_view kind, int col, int row) {
     TowerRuntime tower;
+    tower.kindId = parseTowerKindId(kind);
     tower.kind = std::string(kind);
     tower.col = col;
     tower.row = row;
@@ -80,7 +81,7 @@ TowerRuntime makeTowerRuntime(std::string_view kind, int col, int row) {
         tower.investedCost = entry->cost;
     }
 
-    if (kind == "slow") {
+    if (tower.kindId == TowerKindId::Slow) {
         tower.slowFactor = 0.5f;
         tower.slowTicks = 40;
     }
@@ -165,7 +166,7 @@ void prepareTowerFireState(
     tower.flash = 1.0f;
     tower.recoil = 1.0f;
     tower.cooldown = cooldownTicksOverride >= 0 ? cooldownTicksOverride : (tower.cooldownMin + tower.cooldownMax) / 2;
-    if (tower.kind == "laser" || tower.kind == "beamEmitter") {
+    if (tower.kindId == TowerKindId::Laser || tower.kindId == TowerKindId::BeamEmitter) {
         tower.beamTicks = std::max(1, beamTicks);
     } else {
         tower.beamTicks = 0;

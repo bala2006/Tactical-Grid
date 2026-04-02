@@ -2,6 +2,7 @@
 #define TOWERDEFENSE_NATIVE_ENGINE_H
 
 #include <chrono>
+#include <array>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -9,6 +10,7 @@
 #include "GameRuntimeTypes.h"
 #include "GameConfigState.h"
 #include "GlRenderer2D.h"
+#include "NativeInterop.h"
 #include "TowerCatalog.h"
 #include "WaveRuntime.h"
 
@@ -28,7 +30,8 @@ public:
     void setBoardViewport(int leftPx, int topPx, int widthPx, int heightPx, float density);
     void handleBoardTap(float xPx, float yPx);
     void handleBoardDrag(float xPx, float yPx, int phase);
-    std::string consumeUiSnapshot();
+    const towerdefense::NativeGameSnapshot &snapshot();
+    int consumeAudioEvents(towerdefense::NativeAudioEvent *buffer, int maxEvents);
 
 private:
     enum class TileKind {
@@ -42,6 +45,21 @@ private:
         int col = 0;
         int row = 0;
         int ticksRemaining = 0;
+    };
+
+    struct EnemyDeathEffect {
+        float x = 0.0f;
+        float y = 0.0f;
+        float size = 0.0f;
+        float age = 0.0f;
+        float duration = 0.0f;
+        int primaryR = 0;
+        int primaryG = 0;
+        int primaryB = 0;
+        int secondaryR = 0;
+        int secondaryG = 0;
+        int secondaryB = 0;
+        bool alive = true;
     };
 
     using EnemyInstance = towerdefense::EnemyRuntime;
@@ -70,6 +88,7 @@ private:
     void updateProjectiles();
     void updateExplosions();
     void updateTrailParticles();
+    void updateEnemyDeathEffects();
     void queueNextWave();
     void processEnemyKilled(EnemyInstance &enemy);
     void rebuildDynamicPaths();
@@ -98,6 +117,7 @@ private:
     int findNearestEnemyIndex(float xPx, float yPx, int excludeEnemyId = -1) const;
     void spawnExplosion(float xPx, float yPx, float radiusTiles);
     TowerInstance createTowerInstance(const std::string &kind, int col, int row) const;
+    void queueAudioEvent(towerdefense::SoundType soundId, float volume = 1.0f);
 
     std::mutex mutex_;
     GlRenderer2D renderer_;
@@ -134,6 +154,7 @@ private:
     std::vector<ProjectileInstance> projectiles_;
     std::vector<ExplosionInstance> explosions_;
     std::vector<TrailParticleInstance> trailParticles_;
+    std::vector<EnemyDeathEffect> enemyDeathEffects_;
     std::vector<TempSpawnPoint> tempSpawns_;
     std::vector<std::string> pendingEnemyQueue_;
     std::vector<int> towerCandidatesScratch_;
@@ -169,10 +190,14 @@ private:
     float lastFrameTimeMs_ = 16.7f;
     float smoothedFrameTimeMs_ = 16.7f;
     float lastFps_ = 60.0f;
-    int soundNonce_ = 0;
-    std::string lastSound_;
     int waveCooldownTicksRemaining_ = 0;
     bool waitingForNextWave_ = false;
+    towerdefense::NativeGameSnapshot snapshot_{};
+    static constexpr size_t kAudioQueueCapacity = 64;
+    std::array<towerdefense::NativeAudioEvent, kAudioQueueCapacity> audioQueue_{};
+    size_t audioQueueReadIndex_ = 0;
+    size_t audioQueueWriteIndex_ = 0;
+    size_t audioQueueSize_ = 0;
     std::chrono::steady_clock::time_point lastFrameAt_ = std::chrono::steady_clock::now();
 };
 

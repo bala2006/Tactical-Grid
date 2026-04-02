@@ -86,6 +86,24 @@ class DevFlags {
       zoom: zoom ?? this.zoom,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'showFps': showFps,
+      'godMode': godMode,
+      'firingDisabled': firingDisabled,
+      'zoom': zoom,
+    };
+  }
+
+  factory DevFlags.fromJson(Map<String, dynamic> json) {
+    return DevFlags(
+      showFps: json['showFps'] as bool? ?? false,
+      godMode: json['godMode'] as bool? ?? false,
+      firingDisabled: json['firingDisabled'] as bool? ?? false,
+      zoom: (json['zoom'] as num?)?.toInt() ?? 18,
+    );
+  }
 }
 
 class GameConfig {
@@ -136,6 +154,44 @@ class GameConfig {
       adaptiveQuality: adaptiveQuality ?? this.adaptiveQuality,
       quality: quality ?? this.quality,
       devFlags: devFlags ?? this.devFlags,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'mapSelection': mapSelection,
+      'difficulty': difficulty.index,
+      'waveMode': waveMode.index,
+      'muted': muted,
+      'effectsEnabled': effectsEnabled,
+      'healthBars': healthBars,
+      'autoSend': autoSend,
+      'adaptiveQuality': adaptiveQuality,
+      'quality': quality.index,
+      'devFlags': devFlags.toJson(),
+    };
+  }
+
+  factory GameConfig.fromJson(Map<String, dynamic> json) {
+    final int difficultyIndex = (json['difficulty'] as num?)?.toInt() ?? 1;
+    final int waveModeIndex = (json['waveMode'] as num?)?.toInt() ?? 0;
+    final int qualityIndex = (json['quality'] as num?)?.toInt() ?? 0;
+    return GameConfig(
+      mapSelection: json['mapSelection'] as String? ?? 'sparse2',
+      difficulty: Difficulty.values[
+          difficultyIndex.clamp(0, Difficulty.values.length - 1)],
+      waveMode:
+          WaveMode.values[waveModeIndex.clamp(0, WaveMode.values.length - 1)],
+      muted: json['muted'] as bool? ?? false,
+      effectsEnabled: json['effectsEnabled'] as bool? ?? true,
+      healthBars: json['healthBars'] as bool? ?? true,
+      autoSend: json['autoSend'] as bool? ?? false,
+      adaptiveQuality: json['adaptiveQuality'] as bool? ?? true,
+      quality: PerformanceQuality.values[
+          qualityIndex.clamp(0, PerformanceQuality.values.length - 1)],
+      devFlags: json['devFlags'] == null
+          ? const DevFlags()
+          : DevFlags.fromJson(json['devFlags'] as Map<String, dynamic>),
     );
   }
 }
@@ -230,6 +286,12 @@ class GridPoint {
   static GridPoint fromString(String value) {
     final parts = value.split(',');
     return GridPoint(int.parse(parts[0]), int.parse(parts[1]));
+  }
+
+  List<int> toJson() => <int>[x, y];
+
+  factory GridPoint.fromJson(List<dynamic> json) {
+    return GridPoint((json[0] as num).toInt(), (json[1] as num).toInt());
   }
 }
 
@@ -371,6 +433,27 @@ class StatusEffectInstance {
   final EffectKind kind;
   int duration;
   double? storedSpeed;
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'kind': kind.name,
+      'duration': duration,
+      'storedSpeed': storedSpeed,
+    };
+  }
+
+  factory StatusEffectInstance.fromJson(Map<String, dynamic> json) {
+    final EffectKind kind = EffectKind.values.firstWhere(
+      (EffectKind value) => value.name == (json['kind'] as String? ?? 'slow'),
+      orElse: () => EffectKind.slow,
+    );
+    final StatusEffectInstance effect = StatusEffectInstance(
+      kind: kind,
+      duration: (json['duration'] as num?)?.toInt() ?? 0,
+    );
+    effect.storedSpeed = (json['storedSpeed'] as num?)?.toDouble();
+    return effect;
+  }
 }
 
 class EnemyEntity {
@@ -513,6 +596,24 @@ class RunStats {
       totalDamage: totalDamage ?? this.totalDamage,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'built': built,
+      'kills': kills,
+      'leaks': leaks,
+      'totalDamage': totalDamage,
+    };
+  }
+
+  factory RunStats.fromJson(Map<String, dynamic> json) {
+    return RunStats(
+      built: (json['built'] as num?)?.toInt() ?? 0,
+      kills: (json['kills'] as num?)?.toInt() ?? 0,
+      leaks: (json['leaks'] as num?)?.toInt() ?? 0,
+      totalDamage: (json['totalDamage'] as num?)?.toDouble() ?? 0,
+    );
+  }
 }
 
 class SelectionInfo {
@@ -560,6 +661,11 @@ class PendingPlacementInfo {
     required this.cost,
     required this.anchorX,
     required this.anchorY,
+    this.placementAllowed = false,
+    this.placementAffordable = false,
+    this.showPlaceAction = false,
+    this.remainingTicks = 0,
+    this.statusText = '',
   });
 
   final String id;
@@ -567,6 +673,11 @@ class PendingPlacementInfo {
   final double cost;
   final double anchorX;
   final double anchorY;
+  final bool placementAllowed;
+  final bool placementAffordable;
+  final bool showPlaceAction;
+  final int remainingTicks;
+  final String statusText;
 }
 
 class AppUiState {

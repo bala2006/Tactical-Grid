@@ -6,6 +6,7 @@ namespace {
 
 constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
     {
+        EnemyArchetypeId::Weak,
         "weak",
         "Weak",
         35.0f,
@@ -15,6 +16,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::Strong,
         "strong",
         "Strong",
         75.0f,
@@ -24,6 +26,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::Fast,
         "fast",
         "Fast",
         75.0f,
@@ -33,6 +36,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::Medic,
         "medic",
         "Medic",
         375.0f,
@@ -42,6 +46,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::StrongFast,
         "strongFast",
         "Strong Fast",
         135.0f,
@@ -51,6 +56,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::Stronger,
         "stronger",
         "Stronger",
         375.0f,
@@ -60,6 +66,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::Faster,
         "faster",
         "Faster",
         375.0f,
@@ -69,6 +76,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::Tank,
         "tank",
         "Tank",
         750.0f,
@@ -78,6 +86,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::Taunt,
         "taunt",
         "Taunt",
         1500.0f,
@@ -87,6 +96,7 @@ constexpr std::array<EnemyArchetypeSpec, 10> kEnemyArchetypes = {{
         1,
     },
     {
+        EnemyArchetypeId::Spawner,
         "spawner",
         "Spawner",
         1150.0f,
@@ -106,6 +116,15 @@ const std::array<EnemyArchetypeSpec, 10> &enemyArchetypes() {
 const EnemyArchetypeSpec *findEnemyArchetype(std::string_view id) {
     for (const EnemyArchetypeSpec &spec : kEnemyArchetypes) {
         if (spec.id == id) {
+            return &spec;
+        }
+    }
+    return nullptr;
+}
+
+const EnemyArchetypeSpec *findEnemyArchetype(EnemyArchetypeId id) {
+    for (const EnemyArchetypeSpec &spec : kEnemyArchetypes) {
+        if (spec.archetype == id) {
             return &spec;
         }
     }

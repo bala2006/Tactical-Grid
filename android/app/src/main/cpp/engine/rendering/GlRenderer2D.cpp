@@ -12,12 +12,17 @@ constexpr char kLogTag[] = "towerdefense";
 
 constexpr char kVertexShader[] = R"(#version 300 es
 layout(location = 0) in vec2 aPosition;
-layout(location = 1) in vec4 aColor;
+layout(location = 1) in uint aColor;
 uniform mat4 uProjection;
 out vec4 vColor;
 void main() {
     gl_Position = uProjection * vec4(aPosition, 0.0, 1.0);
-    vColor = aColor;
+    vColor = vec4(
+        float(aColor & 255u) / 255.0,
+        float((aColor >> 8) & 255u) / 255.0,
+        float((aColor >> 16) & 255u) / 255.0,
+        float((aColor >> 24) & 255u) / 255.0
+    );
 }
 )";
 
@@ -50,12 +55,31 @@ GLuint compileShader(GLenum type, const char *source) {
     return 0;
 }
 
-void unpackColor(unsigned int color, float *rgba) {
-    rgba[0] = static_cast<float>(color & 0xff) / 255.0f;
-    rgba[1] = static_cast<float>((color >> 8) & 0xff) / 255.0f;
-    rgba[2] = static_cast<float>((color >> 16) & 0xff) / 255.0f;
-    rgba[3] = static_cast<float>((color >> 24) & 0xff) / 255.0f;
 }
+
+const GlRenderer2D::CircleMesh &GlRenderer2D::circleMeshForSegments(int segments) {
+    if (segments < 3) {
+        static const CircleMesh kEmptyMesh;
+        return kEmptyMesh;
+    }
+
+    if (circleMeshes_.size() <= static_cast<size_t>(segments)) {
+        circleMeshes_.resize(static_cast<size_t>(segments + 1));
+    }
+
+    CircleMesh &mesh = circleMeshes_[static_cast<size_t>(segments)];
+    if (mesh.unitXs.size() != static_cast<size_t>(segments)) {
+        constexpr float kTau = 6.28318530718f;
+        mesh.unitXs.resize(static_cast<size_t>(segments));
+        mesh.unitYs.resize(static_cast<size_t>(segments));
+        for (int index = 0; index < segments; ++index) {
+            const float angle = (static_cast<float>(index) / static_cast<float>(segments)) * kTau;
+            mesh.unitXs[static_cast<size_t>(index)] = std::cos(angle);
+            mesh.unitYs[static_cast<size_t>(index)] = std::sin(angle);
+        }
+    }
+
+    return mesh;
 }
 
 GlRenderer2D::~GlRenderer2D() {
@@ -110,6 +134,7 @@ void GlRenderer2D::shutdown() {
     projectionLocation_ = -1;
     vertexBufferCapacityBytes_ = 0;
     vertices_.clear();
+    circleMeshes_.clear();
 }
 
 void GlRenderer2D::beginFrame(int surfaceWidth, int surfaceHeight) {
@@ -175,17 +200,16 @@ void GlRenderer2D::drawCircle(float cx, float cy, float radius, unsigned int col
         return;
     }
 
-    constexpr float kTau = 6.28318530718f;
+    const CircleMesh &mesh = circleMeshForSegments(segments);
     for (int index = 0; index < segments; ++index) {
-        const float angleA = (static_cast<float>(index) / static_cast<float>(segments)) * kTau;
-        const float angleB = (static_cast<float>(index + 1) / static_cast<float>(segments)) * kTau;
+        const size_t nextIndex = static_cast<size_t>((index + 1) % segments);
         appendTriangle(
             cx,
             cy,
-            cx + std::cos(angleA) * radius,
-            cy + std::sin(angleA) * radius,
-            cx + std::cos(angleB) * radius,
-            cy + std::sin(angleB) * radius,
+            cx + mesh.unitXs[static_cast<size_t>(index)] * radius,
+            cy + mesh.unitYs[static_cast<size_t>(index)] * radius,
+            cx + mesh.unitXs[nextIndex] * radius,
+            cy + mesh.unitYs[nextIndex] * radius,
             color
         );
     }
@@ -196,17 +220,16 @@ void GlRenderer2D::drawEllipse(float cx, float cy, float radiusX, float radiusY,
         return;
     }
 
-    constexpr float kTau = 6.28318530718f;
+    const CircleMesh &mesh = circleMeshForSegments(segments);
     for (int index = 0; index < segments; ++index) {
-        const float angleA = (static_cast<float>(index) / static_cast<float>(segments)) * kTau;
-        const float angleB = (static_cast<float>(index + 1) / static_cast<float>(segments)) * kTau;
+        const size_t nextIndex = static_cast<size_t>((index + 1) % segments);
         appendTriangle(
             cx,
             cy,
-            cx + std::cos(angleA) * radiusX,
-            cy + std::sin(angleA) * radiusY,
-            cx + std::cos(angleB) * radiusX,
-            cy + std::sin(angleB) * radiusY,
+            cx + mesh.unitXs[static_cast<size_t>(index)] * radiusX,
+            cy + mesh.unitYs[static_cast<size_t>(index)] * radiusY,
+            cx + mesh.unitXs[nextIndex] * radiusX,
+            cy + mesh.unitYs[nextIndex] * radiusY,
             color
         );
     }
@@ -238,7 +261,7 @@ void GlRenderer2D::flush() {
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<const void *>(offsetof(Vertex, x)));
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<const void *>(offsetof(Vertex, r)));
+    glVertexAttribIPointer(1, 1, GL_UNSIGNED_INT, sizeof(Vertex), reinterpret_cast<const void *>(offsetof(Vertex, color)));
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices_.size()));
 
     glDisableVertexAttribArray(0);
@@ -253,9 +276,7 @@ void GlRenderer2D::appendTriangle(
     float cx, float cy,
     unsigned int color
 ) {
-    float rgba[4];
-    unpackColor(color, rgba);
-    vertices_.push_back(Vertex{ax, ay, rgba[0], rgba[1], rgba[2], rgba[3]});
-    vertices_.push_back(Vertex{bx, by, rgba[0], rgba[1], rgba[2], rgba[3]});
-    vertices_.push_back(Vertex{cx, cy, rgba[0], rgba[1], rgba[2], rgba[3]});
+    vertices_.push_back(Vertex{ax, ay, color});
+    vertices_.push_back(Vertex{bx, by, color});
+    vertices_.push_back(Vertex{cx, cy, color});
 }

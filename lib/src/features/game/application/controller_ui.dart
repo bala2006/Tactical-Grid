@@ -166,6 +166,16 @@ extension _Ui on GameController {
         cost: placingBlueprint.cost.toDouble(),
         anchorX: _boardOffset.dx + (tile.x + 0.5) * _tileSize,
         anchorY: _boardOffset.dy + (tile.y + 0.5) * _tileSize,
+        placementAllowed: _canPlace(tile),
+        placementAffordable:
+            _config.devFlags.godMode || _cash >= placingBlueprint.cost,
+        showPlaceAction:
+            _canPlace(tile) &&
+            (_config.devFlags.godMode || _cash >= placingBlueprint.cost),
+        remainingTicks: 0,
+        statusText: _placementMessage.isEmpty
+            ? 'Choose a tile.'
+            : _placementMessage,
       );
     }
 
@@ -182,7 +192,8 @@ extension _Ui on GameController {
           : placingBlueprint != null
           ? 'Placing: ${placingBlueprint.title}'
           : 'Selected: None',
-      threatLabel: 'Threat: ${_queuedEnemies.isNotEmpty || _enemies.isNotEmpty ? 'Engaged' : 'Clear'}',
+      threatLabel:
+          'Threat: ${_queuedEnemies.isNotEmpty || _enemies.isNotEmpty ? 'Engaged' : 'Clear'}',
       pills: pills,
       selectionInfo: selectionInfo,
       pendingPlacement: pendingPlacement,
@@ -240,7 +251,9 @@ extension _Ui on GameController {
       cost: blueprint.cost.toDouble(),
       sellPrice: 0,
       upgradePrice: null,
-      upgradeDelta: blueprint.upgrades.isEmpty ? 'No more upgrades' : 'Preview only',
+      upgradeDelta: blueprint.upgrades.isEmpty
+          ? 'No more upgrades'
+          : 'Preview only',
       damage: _rangeText(blueprint.damageMin, blueprint.damageMax),
       dps: _towerDps(blueprint),
       damageTypeLabel: blueprint.damageType.name.toUpperCase(),

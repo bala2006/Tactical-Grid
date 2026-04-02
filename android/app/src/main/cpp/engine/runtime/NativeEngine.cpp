@@ -12,10 +12,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <queue>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 
 using towerdefense::TowerCatalogEntry;
 using towerdefense::EnemyBlueprint;
@@ -48,6 +50,12 @@ using towerdefense::tickEnemySpawnCadence;
 using towerdefense::tickMedicSupport;
 using towerdefense::updateEnemiesFixedStep;
 using towerdefense::waveStateLabel;
+using towerdefense::NativeAudioEvent;
+using towerdefense::NativeGameSnapshot;
+using towerdefense::SoundType;
+using towerdefense::EnemyArchetypeId;
+using towerdefense::TowerKindId;
+using towerdefense::parseTowerKindId;
 
 namespace {
 constexpr double kFixedStepSeconds = 1.0 / 60.0;
@@ -78,6 +86,24 @@ struct Point2D {
     float y;
 };
 
+struct EnemyPalette {
+    RgbColor primary;
+    RgbColor secondary;
+};
+
+template <size_t N>
+void copyCString(char (&destination)[N], std::string_view source) {
+    static_assert(N > 0);
+    const size_t count = std::min(source.size(), N - 1);
+    if (count > 0) {
+        std::memcpy(destination, source.data(), count);
+    }
+    destination[count] = '\0';
+    if (count + 1 < N) {
+        std::memset(destination + count + 1, 0, N - count - 1);
+    }
+}
+
 unsigned int rgba(int r, int g, int b, int a = 255) {
     return (static_cast<unsigned int>(a) << 24) |
            (static_cast<unsigned int>(b) << 16) |
@@ -96,6 +122,36 @@ Point2D rotatePoint(float centerX, float centerY, float angle, float localX, flo
 
 void drawShadow(GlRenderer2D &renderer, float x, float y, float width, float height, int alpha) {
     renderer.drawEllipse(x, y, width * 0.5f, height * 0.5f, rgba(0, 0, 0, alpha), 28);
+}
+
+EnemyPalette enemyPaletteFor(EnemyArchetypeId archetype, bool slowed) {
+    EnemyPalette palette{
+        {146, 152, 145},
+        {190, 194, 184},
+    };
+    if (archetype == EnemyArchetypeId::Fast) {
+        palette = {{118, 132, 138}, {190, 198, 196}};
+    } else if (archetype == EnemyArchetypeId::StrongFast) {
+        palette = {{86, 106, 116}, {170, 180, 178}};
+    } else if (archetype == EnemyArchetypeId::Strong) {
+        palette = {{96, 103, 106}, {145, 150, 147}};
+    } else if (archetype == EnemyArchetypeId::Stronger) {
+        palette = {{86, 90, 88}, {132, 138, 134}};
+    } else if (archetype == EnemyArchetypeId::Faster) {
+        palette = {{122, 116, 92}, {214, 168, 92}};
+    } else if (archetype == EnemyArchetypeId::Medic) {
+        palette = {{127, 116, 102}, {193, 74, 58}};
+    } else if (archetype == EnemyArchetypeId::Tank) {
+        palette = {{92, 108, 82}, {146, 152, 134}};
+    } else if (archetype == EnemyArchetypeId::Taunt) {
+        palette = {{96, 86, 112}, {200, 156, 84}};
+    } else if (archetype == EnemyArchetypeId::Spawner) {
+        palette = {{136, 128, 86}, {214, 188, 102}};
+    }
+    if (slowed) {
+        palette = {{114, 170, 196}, {196, 224, 236}};
+    }
+    return palette;
 }
 
 void drawCircleRing(GlRenderer2D &renderer, float x, float y, float radius, float weight, RgbColor color, int alpha) {
@@ -357,8 +413,8 @@ bool isProceduralMapId(const std::string &mapId) {
            mapId == "custom";
 }
 
-float damageMultiplierFor(std::string_view archetypeId, std::string_view damageType) {
-    if (archetypeId == "tank") {
+float damageMultiplierFor(EnemyArchetypeId archetypeId, std::string_view damageType) {
+    if (archetypeId == EnemyArchetypeId::Tank) {
         if (damageType == "poison" || damageType == "slow") {
             return 0.0f;
         }
@@ -368,18 +424,18 @@ float damageMultiplierFor(std::string_view archetypeId, std::string_view damageT
         if (damageType == "explosion" || damageType == "piercing") {
             return 1.5f;
         }
-    } else if (archetypeId == "taunt") {
+    } else if (archetypeId == EnemyArchetypeId::Taunt) {
         if (damageType == "poison" || damageType == "slow") {
             return 0.0f;
         }
         if (damageType == "energy" || damageType == "physical") {
             return 0.5f;
         }
-    } else if (archetypeId == "faster") {
+    } else if (archetypeId == EnemyArchetypeId::Faster) {
         if (damageType == "explosion") {
             return 0.5f;
         }
-    } else if (archetypeId == "medic") {
+    } else if (archetypeId == EnemyArchetypeId::Medic) {
         if (damageType == "regen") {
             return 0.0f;
         }
@@ -387,20 +443,22 @@ float damageMultiplierFor(std::string_view archetypeId, std::string_view damageT
     return 1.0f;
 }
 
-std::string_view damageTypeForTower(std::string_view towerKind) {
-    if (towerKind == "laser" || towerKind == "beamEmitter" || towerKind == "tesla" || towerKind == "plasma") {
+std::string_view damageTypeForTower(TowerKindId towerKind) {
+    if (towerKind == TowerKindId::Laser || towerKind == TowerKindId::BeamEmitter ||
+        towerKind == TowerKindId::Tesla || towerKind == TowerKindId::Plasma) {
         return "energy";
     }
-    if (towerKind == "slow") {
+    if (towerKind == TowerKindId::Slow) {
         return "slow";
     }
-    if (towerKind == "poison") {
+    if (towerKind == TowerKindId::Poison) {
         return "poison";
     }
-    if (towerKind == "rocket" || towerKind == "missileSilo" || towerKind == "bomb" || towerKind == "clusterBomb") {
+    if (towerKind == TowerKindId::Rocket || towerKind == TowerKindId::MissileSilo ||
+        towerKind == TowerKindId::Bomb || towerKind == TowerKindId::ClusterBomb) {
         return "explosion";
     }
-    if (towerKind == "railgun") {
+    if (towerKind == TowerKindId::Railgun) {
         return "piercing";
     }
     return "physical";
@@ -647,6 +705,7 @@ void NativeEngine::restartRunLocked() {
     projectiles_.clear();
     explosions_.clear();
     trailParticles_.clear();
+    enemyDeathEffects_.clear();
     tempSpawns_.clear();
     pendingEnemyQueue_.clear();
     waveCooldownTicksRemaining_ = 0;
@@ -735,6 +794,7 @@ bool NativeEngine::invokeAction(const std::string &actionId, const std::string &
         if (!config_.effects) {
             explosions_.clear();
             trailParticles_.clear();
+            enemyDeathEffects_.clear();
         }
         return config_.effects;
     } else if (actionId == "toggleHealthBars") {
@@ -880,8 +940,8 @@ bool NativeEngine::invokeAction(const std::string &actionId, const std::string &
                 if (!tower.alive || tower.col != selectedCol_ || tower.row != selectedRow_) {
                     continue;
                 }
-                if (const TowerCatalogEntry *catalogEntry = findTowerCatalogEntry(tower.kind)) {
-                    const int upgradePrice = computeUpgradePrice(tower.kind);
+                if (const TowerCatalogEntry *catalogEntry = findTowerCatalogEntry(tower.kindId)) {
+                    const int upgradePrice = computeUpgradePrice(tower.kindId);
                     if (!config_.godMode && cash_ < upgradePrice) {
                         return false;
                     }
@@ -940,12 +1000,13 @@ void NativeEngine::handleBoardDrag(float xPx, float yPx, int phase) {
     onPointer(xPx, yPx, phase);
 }
 
-std::string NativeEngine::consumeUiSnapshot() {
+const NativeGameSnapshot &NativeEngine::snapshot() {
     std::scoped_lock lock(mutex_);
     const int builtCount = std::max(
         builtCount_,
         static_cast<int>(towers_.size())
     );
+    snapshot_ = NativeGameSnapshot{};
     const TowerInstance *selectedTower = nullptr;
     if (selectedCol_ >= 0 && selectedRow_ >= 0) {
         for (const TowerInstance &tower : towers_) {
@@ -1061,7 +1122,6 @@ std::string NativeEngine::consumeUiSnapshot() {
         placementReason.clear();
     }
     const bool defeatVisible = health_ <= 0;
-    const char *qualityLabel = config_.quality == 2 ? "battery" : (config_.quality == 1 ? "balanced" : "high");
     const std::string targetingLabel = selectedHasTower
         ? std::string(targetingModeLabel(selectedTower->targetingMode))
         : std::string(targetingModeLabel(TargetingMode::First));
@@ -1069,135 +1129,132 @@ std::string NativeEngine::consumeUiSnapshot() {
         ? "Selected: " + towerTitle
         : (buildMode_ ? "Placing: " + towerTitle : "Selected: None");
     const unsigned int titleColor = catalogEntry != nullptr ? catalogEntry->displayColor : packColor(255, 255, 255);
-    std::ostringstream snapshot;
-    snapshot
-        << "{"
-        << "\"runId\":" << runId_ << ","
-        << "\"tick\":" << tickCount_ << ","
-        << "\"simTimeMs\":" << static_cast<long long>(simTimeSeconds_ * 1000.0) << ","
-        << "\"activeScreen\":" << activeScreen_ << ","
-        << "\"hud\":{"
-        << "\"health\":" << health_ << ","
-        << "\"maxHealth\":" << maxHealth_ << ","
-        << "\"cash\":" << cash_ << ","
-        << "\"wave\":" << waveRuntime_.waveNumber << ","
-        << "\"kills\":" << kills_ << ","
-        << "\"waveState\":\"" << waveStateLabel(waveRuntime_) << "\","
-        << "\"paused\":" << (paused_ ? "true" : "false")
-        << "},"
-        << "\"perf\":{"
-        << "\"show\":" << (config_.showFps ? "true" : "false") << ","
-        << "\"fps\":" << static_cast<int>(lastFps_ + 0.5f) << ","
-        << "\"frameTimeMs\":" << smoothedFrameTimeMs_ << ","
-        << "\"quality\":\"" << qualityLabel << "\""
-        << "},"
-        << "\"defeat\":{"
-        << "\"visible\":" << (defeatVisible ? "true" : "false") << ","
-        << "\"summary\":\""
-        << (defeatVisible
-            ? "Reached wave " + std::to_string(waveRuntime_.waveNumber) +
-              "\\nTowers built: " + std::to_string(builtCount) +
-              "\\nKills: " + std::to_string(kills_) +
-              "\\nDamage dealt: " + std::to_string(static_cast<int>(std::round(totalDamage_))) +
-              "\\nLeaks: " + std::to_string(leakCount_)
-            : std::string())
-        << "\""
-        << "},"
-        << "\"config\":{"
-        << "\"difficulty\":" << config_.difficulty << ","
-        << "\"waveMode\":" << config_.waveMode << ","
-        << "\"quality\":" << config_.quality << ","
-        << "\"effects\":" << (config_.effects ? "true" : "false") << ","
-        << "\"healthBars\":" << (config_.healthBars ? "true" : "false") << ","
-        << "\"muted\":" << (config_.muted ? "true" : "false") << ","
-        << "\"autoSend\":" << (config_.autoSend ? "true" : "false") << ","
-        << "\"adaptiveQuality\":" << (config_.adaptiveQuality ? "true" : "false") << ","
-        << "\"showFps\":" << (config_.showFps ? "true" : "false") << ","
-        << "\"godMode\":" << (config_.godMode ? "true" : "false") << ","
-        << "\"firingDisabled\":" << (config_.firingDisabled ? "true" : "false") << ","
-        << "\"zoom\":" << config_.zoom << ","
-        << "\"mapId\":\"" << mapId_ << "\""
-        << "},"
-        << "\"runStats\":{"
-        << "\"built\":" << builtCount << ","
-        << "\"kills\":" << kills_ << ","
-        << "\"leaks\":" << leakCount_ << ","
-        << "\"totalDamage\":" << totalDamage_
-        << "},"
-        << "\"storeButtons\":[";
-    const auto &catalogEntries = towerCatalogEntries();
-    bool firstStoreButton = true;
-    for (size_t index = 0; index < catalogEntries.size(); ++index) {
-        const TowerCatalogEntry &entry = catalogEntries[index];
-        if (!entry.storeVisible) {
-            continue;
-        }
-        if (!firstStoreButton) {
-            snapshot << ",";
-        }
-        firstStoreButton = false;
-        snapshot
-            << "{"
-            << "\"id\":\"" << entry.kindId << "\","
-            << "\"title\":\"" << entry.title << "\","
-            << "\"cost\":" << entry.cost << ","
-            << "\"color\":" << entry.displayColor
-            << "}";
+    snapshot_.runId = runId_;
+    snapshot_.tick = tickCount_;
+    snapshot_.simTimeMs = static_cast<long long>(simTimeSeconds_ * 1000.0);
+    snapshot_.activeScreen = activeScreen_;
+
+    snapshot_.hud.health = health_;
+    snapshot_.hud.maxHealth = maxHealth_;
+    snapshot_.hud.cash = cash_;
+    snapshot_.hud.wave = waveRuntime_.waveNumber;
+    snapshot_.hud.kills = kills_;
+    copyCString(snapshot_.hud.waveState, waveStateLabel(waveRuntime_));
+    snapshot_.hud.paused = paused_ ? 1 : 0;
+
+    snapshot_.perf.show = config_.showFps ? 1 : 0;
+    snapshot_.perf.fps = static_cast<float>(static_cast<int>(lastFps_ + 0.5f));
+    snapshot_.perf.frameTimeMs = smoothedFrameTimeMs_;
+    snapshot_.perf.quality = config_.quality;
+
+    snapshot_.defeatVisible = defeatVisible ? 1 : 0;
+    if (defeatVisible) {
+        copyCString(
+            snapshot_.defeatSummary,
+            "Reached wave " + std::to_string(waveRuntime_.waveNumber) +
+                "\nTowers built: " + std::to_string(builtCount) +
+                "\nKills: " + std::to_string(kills_) +
+                "\nDamage dealt: " + std::to_string(static_cast<int>(std::round(totalDamage_))) +
+                "\nLeaks: " + std::to_string(leakCount_)
+        );
     }
-    snapshot << "],";
+
+    snapshot_.config.difficulty = config_.difficulty;
+    snapshot_.config.waveMode = config_.waveMode;
+    snapshot_.config.quality = config_.quality;
+    snapshot_.config.effects = config_.effects ? 1 : 0;
+    snapshot_.config.healthBars = config_.healthBars ? 1 : 0;
+    snapshot_.config.muted = config_.muted ? 1 : 0;
+    snapshot_.config.autoSend = config_.autoSend ? 1 : 0;
+    snapshot_.config.adaptiveQuality = config_.adaptiveQuality ? 1 : 0;
+    snapshot_.config.showFps = config_.showFps ? 1 : 0;
+    snapshot_.config.godMode = config_.godMode ? 1 : 0;
+    snapshot_.config.firingDisabled = config_.firingDisabled ? 1 : 0;
+    snapshot_.config.zoom = config_.zoom;
+    copyCString(snapshot_.config.mapId, mapId_);
+
+    snapshot_.runStats.built = builtCount;
+    snapshot_.runStats.kills = kills_;
+    snapshot_.runStats.leaks = leakCount_;
+    snapshot_.runStats.totalDamage = totalDamage_;
+
+    snapshot_.selection.present = hasSelection ? 1 : 0;
     if (hasSelection) {
-        snapshot
-            << "\"selection\":{"
-            << "\"status\":\""
-            << selectionStatus
-            << "\","
-            << "\"title\":\"" << towerTitle << "\","
-            << "\"titleColor\":" << titleColor << ","
-            << "\"cost\":" << cost << ","
-            << "\"sellPrice\":" << sellPrice << ","
-            << "\"upgradePrice\":"
-            << ((selectedHasTower && nextEntry != nullptr) ? std::to_string(upgradePrice) : std::string("null"))
-            << ","
-            << "\"upgradeDelta\":\"" << upgradeDelta << "\","
-            << "\"damage\":\"" << damageText << "\","
-            << "\"dps\":" << dps << ","
-            << "\"damageTypeLabel\":\"" << damageTypeLabel << "\","
-            << "\"range\":" << range << ","
-            << "\"cooldownSeconds\":" << cooldownSeconds << ","
-            << "\"targeting\":\"" << (selectedHasTower ? targetingLabel : (catalogEntry != nullptr ? std::string(catalogEntry->targetingText) : targetingLabel)) << "\","
-            << "\"effect\":\"" << effectText << "\","
-            << "\"placementReason\":\"" << placementReason << "\","
-            << "\"canSell\":" << (selectedHasTower ? "true" : "false") << ","
-            << "\"canUpgrade\":" << ((selectedHasTower && nextEntry != nullptr && (config_.godMode || cash_ >= upgradePrice)) ? "true" : "false")
-            << "},";
-    } else {
-        snapshot << "\"selection\":null,";
+        snapshot_.selection.titleColor = titleColor;
+        snapshot_.selection.cost = static_cast<float>(cost);
+        snapshot_.selection.sellPrice = static_cast<float>(sellPrice);
+        snapshot_.selection.hasUpgradePrice = (selectedHasTower && nextEntry != nullptr) ? 1 : 0;
+        snapshot_.selection.upgradePrice = static_cast<float>(upgradePrice);
+        snapshot_.selection.dps = static_cast<float>(dps);
+        snapshot_.selection.range = range;
+        snapshot_.selection.cooldownSeconds = static_cast<float>(cooldownSeconds);
+        snapshot_.selection.canSell = selectedHasTower ? 1 : 0;
+        snapshot_.selection.canUpgrade =
+            (selectedHasTower && nextEntry != nullptr && (config_.godMode || cash_ >= upgradePrice)) ? 1 : 0;
+        copyCString(snapshot_.selection.status, selectionStatus);
+        copyCString(snapshot_.selection.title, towerTitle);
+        copyCString(snapshot_.selection.upgradeDelta, upgradeDelta);
+        copyCString(snapshot_.selection.damage, damageText);
+        copyCString(snapshot_.selection.damageTypeLabel, damageTypeLabel);
+        copyCString(
+            snapshot_.selection.targeting,
+            selectedHasTower
+                ? targetingLabel
+                : (catalogEntry != nullptr ? std::string(catalogEntry->targetingText) : targetingLabel)
+        );
+        copyCString(snapshot_.selection.effect, effectText);
+        copyCString(snapshot_.selection.placementReason, placementReason);
     }
-    snapshot
-        << "\"pendingPlacement\":";
+
+    snapshot_.pendingPlacement.present = hasPendingPlacement ? 1 : 0;
     if (hasPendingPlacement) {
-        snapshot
-            << "{"
-            << "\"id\":\"" << popupPlacementCol << "," << popupPlacementRow << ":" << buildTowerKind_ << "\","
-            << "\"title\":\"" << towerTitle << "\","
-            << "\"cost\":" << cost << ","
-            << "\"anchorX\":" << tileCenterX(popupPlacementCol) << ","
-            << "\"anchorY\":" << tileCenterY(popupPlacementRow) << ","
-            << "\"placementAllowed\":" << (placementAllowed ? "true" : "false") << ","
-            << "\"placementAffordable\":" << (placementAffordable ? "true" : "false") << ","
-            << "\"showPlaceAction\":" << (showPlaceAction ? "true" : "false") << ","
-            << "\"remainingTicks\":" << std::max(0, remainingPlacementTicks) << ","
-            << "\"statusText\":\"" << placementReason << "\""
-            << "},";
-    } else {
-        snapshot << "null,";
+        copyCString(
+            snapshot_.pendingPlacement.id,
+            std::to_string(popupPlacementCol) + "," + std::to_string(popupPlacementRow) + ":" + buildTowerKind_
+        );
+        copyCString(snapshot_.pendingPlacement.title, towerTitle);
+        snapshot_.pendingPlacement.cost = static_cast<float>(cost);
+        snapshot_.pendingPlacement.anchorX = tileCenterX(popupPlacementCol) / densityScale_;
+        snapshot_.pendingPlacement.anchorY = tileCenterY(popupPlacementRow) / densityScale_;
+        snapshot_.pendingPlacement.placementAllowed = placementAllowed ? 1 : 0;
+        snapshot_.pendingPlacement.placementAffordable = placementAffordable ? 1 : 0;
+        snapshot_.pendingPlacement.showPlaceAction = showPlaceAction ? 1 : 0;
+        snapshot_.pendingPlacement.remainingTicks = std::max(0, remainingPlacementTicks);
+        copyCString(snapshot_.pendingPlacement.statusText, placementReason);
     }
-    snapshot
-        << "\"exportMap\":\"" << mapId_ << "\","
-        << "\"soundNonce\":" << soundNonce_ << ","
-        << "\"lastSound\":\"" << lastSound_ << "\""
-        << "}";
-    return snapshot.str();
+
+    copyCString(snapshot_.exportMap, mapId_);
+    return snapshot_;
+}
+
+int NativeEngine::consumeAudioEvents(NativeAudioEvent *buffer, int maxEvents) {
+    if (buffer == nullptr || maxEvents <= 0) {
+        return 0;
+    }
+    std::scoped_lock lock(mutex_);
+    const int available = static_cast<int>(std::min(audioQueueSize_, static_cast<size_t>(maxEvents)));
+    for (int index = 0; index < available; ++index) {
+        buffer[index] = audioQueue_[audioQueueReadIndex_];
+        audioQueueReadIndex_ = (audioQueueReadIndex_ + 1) % kAudioQueueCapacity;
+    }
+    audioQueueSize_ -= static_cast<size_t>(available);
+    return available;
+}
+
+void NativeEngine::queueAudioEvent(SoundType soundId, float volume) {
+    if (soundId == SoundType::None) {
+        return;
+    }
+    audioQueue_[audioQueueWriteIndex_] = NativeAudioEvent{
+        static_cast<std::uint8_t>(soundId),
+        volume,
+    };
+    audioQueueWriteIndex_ = (audioQueueWriteIndex_ + 1) % kAudioQueueCapacity;
+    if (audioQueueSize_ == kAudioQueueCapacity) {
+        audioQueueReadIndex_ = (audioQueueReadIndex_ + 1) % kAudioQueueCapacity;
+    } else {
+        audioQueueSize_++;
+    }
 }
 
 void NativeEngine::updateSimulation(double dtSeconds) {
@@ -1243,6 +1300,7 @@ void NativeEngine::updateSimulation(double dtSeconds) {
         updateProjectiles();
         updateExplosions();
         updateTrailParticles();
+        updateEnemyDeathEffects();
         waveRuntime_.waveActive = !pendingEnemyQueue_.empty() || !enemies_.empty();
         simAccumulatorSeconds_ -= kFixedStepSeconds;
     }
@@ -1301,44 +1359,44 @@ void NativeEngine::renderBoard(float pulse) {
         bool hasBase;
     };
 
-    const auto towerVisual = [](const std::string &kind) -> TowerVisual {
-        if (kind == "beamEmitter") {
+    const auto towerVisual = [](TowerKindId kind) -> TowerVisual {
+        if (kind == TowerKindId::BeamEmitter) {
             return TowerVisual{{107, 155, 149}, {156, 160, 154}, {156, 220, 214}, 0.65f, 0.9f, 0.35f, true, true, true};
         }
-        if (kind == "laser") {
+        if (kind == TowerKindId::Laser) {
             return TowerVisual{{83, 120, 117}, {128, 136, 126}, {156, 220, 214}, 0.55f, 0.8f, 0.25f, true, true, true};
         }
-        if (kind == "poison") {
+        if (kind == TowerKindId::Poison) {
             return TowerVisual{{114, 128, 86}, {135, 145, 132}, {255, 214, 170}, 1.1f, 0.9f, 0.3f, false, false, true};
         }
-        if (kind == "slow" || kind == "poison") {
+        if (kind == TowerKindId::Slow || kind == TowerKindId::Poison) {
             return TowerVisual{{98, 110, 96}, {135, 145, 132}, {255, 214, 170}, 1.1f, 0.9f, 0.3f, false, false, true};
         }
-        if (kind == "railgun") {
+        if (kind == TowerKindId::Railgun) {
             return TowerVisual{{85, 90, 102}, {118, 126, 140}, {255, 224, 184}, 0.7f, 1.0f, 0.4f, false, true, true};
         }
-        if (kind == "sniper" || kind == "railgun") {
+        if (kind == TowerKindId::Sniper || kind == TowerKindId::Railgun) {
             return TowerVisual{{108, 102, 90}, {148, 142, 128}, {255, 224, 184}, 0.7f, 0.9f, 0.3f, false, true, false};
         }
-        if (kind == "missileSilo") {
+        if (kind == TowerKindId::MissileSilo) {
             return TowerVisual{{112, 126, 138}, {98, 108, 115}, {255, 214, 170}, 0.6f, 0.75f, 0.2f, false, false, true};
         }
-        if (kind == "rocket" || kind == "missileSilo") {
+        if (kind == TowerKindId::Rocket || kind == TowerKindId::MissileSilo) {
             return TowerVisual{{94, 114, 82}, {130, 136, 126}, {255, 214, 170}, 0.6f, 0.75f, 0.2f, false, false, true};
         }
-        if (kind == "clusterBomb") {
+        if (kind == TowerKindId::ClusterBomb) {
             return TowerVisual{{103, 97, 82}, {119, 124, 115}, {255, 214, 170}, 0.6f, 1.1f, 0.35f, false, false, true};
         }
-        if (kind == "bomb" || kind == "clusterBomb") {
+        if (kind == TowerKindId::Bomb || kind == TowerKindId::ClusterBomb) {
             return TowerVisual{{103, 97, 82}, {119, 124, 115}, {255, 214, 170}, 0.6f, 1.0f, 0.35f, false, false, true};
         }
-        if (kind == "plasma") {
+        if (kind == TowerKindId::Plasma) {
             return TowerVisual{{142, 198, 214}, {78, 102, 112}, {156, 220, 214}, 0.5f, 1.1f, 0.28f, false, true, false};
         }
-        if (kind == "tesla" || kind == "plasma") {
+        if (kind == TowerKindId::Tesla || kind == TowerKindId::Plasma) {
             return TowerVisual{{168, 188, 198}, {88, 108, 118}, {156, 220, 214}, 0.5f, 1.0f, 0.28f, false, true, false};
         }
-        if (kind == "machineGun") {
+        if (kind == TowerKindId::MachineGun) {
             return TowerVisual{{126, 118, 86}, {128, 136, 126}, {255, 191, 128}, 0.65f, 0.9f, 0.3f, true, true, true};
         }
         return TowerVisual{{96, 112, 86}, {128, 136, 126}, {255, 212, 146}, 0.65f, 0.9f, 0.3f, true, true, true};
@@ -1410,7 +1468,7 @@ void NativeEngine::renderBoard(float pulse) {
     };
 
     const auto drawGenericTower = [this, &drawTowerBase, &towerVisual](const TowerInstance &tower, int alpha) {
-        const TowerVisual style = towerVisual(tower.kind);
+        const TowerVisual style = towerVisual(tower.kindId);
         const float cx = tileCenterX(tower.col);
         const float cy = tileCenterY(tower.row);
         drawShadow(renderer_, cx, cy + tileSize_ * 0.18f, style.radius * tileSize_ * 0.95f, style.radius * tileSize_ * 0.45f, 70 * alpha / 255);
@@ -1419,13 +1477,13 @@ void NativeEngine::renderBoard(float pulse) {
         }
 
         const float angle = tower.angle;
-        if (tower.kind == "slow" || tower.kind == "poison") {
+        if (tower.kindId == TowerKindId::Slow || tower.kindId == TowerKindId::Poison) {
             drawOrientedRect(renderer_, cx, cy, angle, -style.length * tileSize_ * 0.5f, -style.width * tileSize_ * 0.5f, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedRect(renderer_, cx, cy, angle, -style.length * tileSize_ * 0.5f + tileSize_ * 0.02f, -style.width * tileSize_ * 0.5f + tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
             drawOrientedRect(renderer_, cx, cy, angle, -style.length * tileSize_ * 0.36f, -tileSize_ * 0.06f, tileSize_ * 0.12f, tileSize_ * 0.12f, rgba(86, 95, 84, alpha));
             drawOrientedRect(renderer_, cx, cy, angle, -style.length * tileSize_ * 0.06f, -tileSize_ * 0.06f, tileSize_ * 0.12f, tileSize_ * 0.12f, rgba(86, 95, 84, alpha));
             drawOrientedRect(renderer_, cx, cy, angle, style.length * tileSize_ * 0.24f, -tileSize_ * 0.06f, tileSize_ * 0.12f, tileSize_ * 0.12f, rgba(86, 95, 84, alpha));
-        } else if (tower.kind == "rocket") {
+        } else if (tower.kindId == TowerKindId::Rocket) {
             drawOrientedRect(renderer_, cx, cy, angle, 0.0f, -style.width * tileSize_, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedRect(renderer_, cx, cy, angle, 0.0f, 0.0f, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedRect(renderer_, cx, cy, angle, tileSize_ * 0.02f, -style.width * tileSize_ + tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
@@ -1440,7 +1498,7 @@ void NativeEngine::renderBoard(float pulse) {
                 {style.width * tileSize_ * 1.25f, -style.width * tileSize_ * 1.5f},
                 rgba(style.color.r, style.color.g, style.color.b, alpha)
             );
-        } else if (tower.kind == "missileSilo") {
+        } else if (tower.kindId == TowerKindId::MissileSilo) {
             drawOrientedRect(renderer_, cx, cy, angle, 0.0f, -style.width * tileSize_, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedRect(renderer_, cx, cy, angle, 0.0f, 0.0f, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedRect(renderer_, cx, cy, angle, tileSize_ * 0.02f, -style.width * tileSize_ + tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
@@ -1455,7 +1513,7 @@ void NativeEngine::renderBoard(float pulse) {
                 {style.width * tileSize_ * 1.25f, -style.width * tileSize_ * 1.5f},
                 rgba(74, 88, 104, alpha)
             );
-        } else if (tower.kind == "sniper") {
+        } else if (tower.kindId == TowerKindId::Sniper) {
             const float height = style.radius * tileSize_ * 0.8660254f;
             const float back = -height / 3.0f;
             const float front = height * 2.0f / 3.0f;
@@ -1463,20 +1521,20 @@ void NativeEngine::renderBoard(float pulse) {
             drawOrientedTriangle(renderer_, cx, cy, angle, {back, -side}, {back, side}, {front, 0.0f}, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedTriangle(renderer_, cx, cy, angle, {back + tileSize_ * 0.02f, -side + tileSize_ * 0.02f}, {back + tileSize_ * 0.02f, side - tileSize_ * 0.02f}, {front - tileSize_ * 0.02f, 0.0f}, rgba(style.color.r, style.color.g, style.color.b, alpha));
             drawOrientedRect(renderer_, cx, cy, angle, back - tileSize_ * 0.18f, -tileSize_ * 0.08f, tileSize_ * 0.22f, tileSize_ * 0.16f, rgba(148, 142, 128, alpha));
-        } else if (tower.kind == "railgun") {
+        } else if (tower.kindId == TowerKindId::Railgun) {
             const float base = -style.length * tileSize_;
             const float side = -style.width * tileSize_ * 0.5f;
             drawOrientedRect(renderer_, cx, cy, angle, base, side, style.length * tileSize_ * 2.0f, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedRect(renderer_, cx, cy, angle, base + tileSize_ * 0.02f, side + tileSize_ * 0.02f, style.length * tileSize_ * 2.0f - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
             drawOrientedRect(renderer_, cx, cy, angle, -style.radius * tileSize_ * 0.25f, -style.radius * tileSize_ * 0.25f, style.radius * tileSize_ * 0.5f, style.radius * tileSize_ * 0.5f, rgba(179, 70, 58, alpha));
-        } else if (tower.kind == "bomb" || tower.kind == "clusterBomb") {
+        } else if (tower.kindId == TowerKindId::Bomb || tower.kindId == TowerKindId::ClusterBomb) {
             drawOrientedRect(renderer_, cx, cy, angle, 0.0f, -style.width * tileSize_ * 0.5f, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedRect(renderer_, cx, cy, angle, tileSize_ * 0.02f, -style.width * tileSize_ * 0.5f + tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
-            const int accent = tower.kind == "clusterBomb" ? 202 : 171;
+            const int accent = tower.kindId == TowerKindId::ClusterBomb ? 202 : 171;
             drawOrientedRect(renderer_, cx, cy, angle, -style.radius * tileSize_ * 0.25f, -style.radius * tileSize_ * 0.25f, style.radius * tileSize_ * 0.5f, style.radius * tileSize_ * 0.5f, rgba(accent, 138, 76, alpha));
-        } else if (tower.kind == "tesla" || tower.kind == "plasma") {
+        } else if (tower.kindId == TowerKindId::Tesla || tower.kindId == TowerKindId::Plasma) {
             drawRegularPolygon(renderer_, cx, cy, style.radius * tileSize_ * 0.25f, 6, angle, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
-            const float core = (tower.kind == "plasma" ? 0.6f : 0.55f) * tileSize_;
+            const float core = (tower.kindId == TowerKindId::Plasma ? 0.6f : 0.55f) * tileSize_;
             renderer_.drawRect(cx - core * 0.5f, cy - core * 0.5f, core, core, rgba(style.color.r, style.color.g, style.color.b, alpha));
         } else {
             const float recoil = tower.recoil * tileSize_ * 0.16f;
@@ -1536,56 +1594,27 @@ void NativeEngine::renderBoard(float pulse) {
         const float enemyX = enemy.prevX + (enemy.x - enemy.prevX) * renderAlpha_;
         const float enemyY = enemy.prevY + (enemy.y - enemy.prevY) * renderAlpha_;
 
-        RgbColor primary{146, 152, 145};
-        RgbColor secondary{190, 194, 184};
-        if (enemy.archetypeId == "fast") {
-            primary = {118, 132, 138};
-            secondary = {190, 198, 196};
-        } else if (enemy.archetypeId == "strongFast") {
-            primary = {86, 106, 116};
-            secondary = {170, 180, 178};
-        } else if (enemy.archetypeId == "strong") {
-            primary = {96, 103, 106};
-            secondary = {145, 150, 147};
-        } else if (enemy.archetypeId == "stronger") {
-            primary = {86, 90, 88};
-            secondary = {132, 138, 134};
-        } else if (enemy.archetypeId == "faster") {
-            primary = {122, 116, 92};
-            secondary = {214, 168, 92};
-        } else if (enemy.archetypeId == "medic") {
-            primary = {127, 116, 102};
-            secondary = {193, 74, 58};
-        } else if (enemy.archetypeId == "tank") {
-            primary = {92, 108, 82};
-            secondary = {146, 152, 134};
-        } else if (enemy.archetypeId == "taunt") {
-            primary = {96, 86, 112};
-            secondary = {200, 156, 84};
-        } else if (enemy.archetypeId == "spawner") {
-            primary = {136, 128, 86};
-            secondary = {214, 188, 102};
-        }
-        if (enemy.slowTicks > 0) {
-            primary = {114, 170, 196};
-            secondary = {196, 224, 236};
-        }
+        const EnemyPalette palette = enemyPaletteFor(enemy.archetype, enemy.slowTicks > 0);
+        const RgbColor primary = palette.primary;
+        const RgbColor secondary = palette.secondary;
         const float angle = std::atan2(enemy.vy, enemy.vx);
 
-        if (enemy.archetypeId == "fast" || enemy.archetypeId == "strongFast" || enemy.archetypeId == "faster") {
+        if (enemy.archetype == EnemyArchetypeId::Fast ||
+            enemy.archetype == EnemyArchetypeId::StrongFast ||
+            enemy.archetype == EnemyArchetypeId::Faster) {
             const int baseAlpha = 255;
             const unsigned int primaryColor = rgba(primary.r, primary.g, primary.b, baseAlpha);
             const unsigned int secondaryColor = rgba(secondary.r, secondary.g, secondary.b, baseAlpha);
-            const float scale = enemy.archetypeId == "strongFast" ? 0.8f : (enemy.archetypeId == "faster" ? 0.7f : 0.55f);
+            const float scale = enemy.archetype == EnemyArchetypeId::StrongFast ? 0.8f : (enemy.archetype == EnemyArchetypeId::Faster ? 0.7f : 0.55f);
             const float back = -scale * tileSize_ / 3.0f;
             const float front = back + scale * tileSize_;
-            const float side = (enemy.archetypeId == "strongFast" ? 1.0f : (enemy.archetypeId == "faster" ? 0.9f : 0.8f)) * tileSize_ * 0.5f;
+            const float side = (enemy.archetype == EnemyArchetypeId::StrongFast ? 1.0f : (enemy.archetype == EnemyArchetypeId::Faster ? 0.9f : 0.8f)) * tileSize_ * 0.5f;
             drawOrientedQuad(renderer_, enemyX, enemyY, angle, {back, -side}, {0.0f, 0.0f}, {back, side}, {front, 0.0f}, rgba(0, 0, 0, 180));
             drawOrientedQuad(renderer_, enemyX, enemyY, angle, {back + tileSize_ * 0.02f, -side + tileSize_ * 0.02f}, {tileSize_ * 0.02f, 0.0f}, {back + tileSize_ * 0.02f, side - tileSize_ * 0.02f}, {front - tileSize_ * 0.02f, 0.0f}, primaryColor);
-            if (enemy.archetypeId == "faster") {
+            if (enemy.archetype == EnemyArchetypeId::Faster) {
                 drawOrientedTriangle(renderer_, enemyX, enemyY, angle, {back + tileSize_ * 0.06f, -tileSize_ * 0.14f}, {front - tileSize_ * 0.08f, 0.0f}, {back + tileSize_ * 0.06f, tileSize_ * 0.14f}, secondaryColor);
             } else {
-                drawOrientedRect(renderer_, enemyX, enemyY, angle, back + tileSize_ * 0.08f, -(enemy.archetypeId == "strongFast" ? tileSize_ * 0.1f : tileSize_ * 0.08f), enemy.archetypeId == "strongFast" ? tileSize_ * 0.22f : tileSize_ * 0.18f, enemy.archetypeId == "strongFast" ? tileSize_ * 0.2f : tileSize_ * 0.16f, secondaryColor);
+                drawOrientedRect(renderer_, enemyX, enemyY, angle, back + tileSize_ * 0.08f, -(enemy.archetype == EnemyArchetypeId::StrongFast ? tileSize_ * 0.1f : tileSize_ * 0.08f), enemy.archetype == EnemyArchetypeId::StrongFast ? tileSize_ * 0.22f : tileSize_ * 0.18f, enemy.archetype == EnemyArchetypeId::StrongFast ? tileSize_ * 0.2f : tileSize_ * 0.16f, secondaryColor);
             }
         } else {
             drawShadow(renderer_, enemyX, enemyY + tileSize_ * 0.18f, enemy.radius * tileSize_ * 0.9f, enemy.radius * tileSize_ * 0.38f, 65);
@@ -1593,7 +1622,7 @@ void NativeEngine::renderBoard(float pulse) {
             const int baseAlpha = 255;
             const unsigned int primaryColor = rgba(primary.r, primary.g, primary.b, baseAlpha);
             const unsigned int secondaryColor = rgba(secondary.r, secondary.g, secondary.b, baseAlpha);
-            if (enemy.archetypeId == "tank") {
+            if (enemy.archetype == EnemyArchetypeId::Tank) {
                 const float front = enemy.radius * tileSize_ * 0.5f;
                 const float side = 0.35f * tileSize_;
                 const float barrel = 0.075f * tileSize_;
@@ -1603,7 +1632,7 @@ void NativeEngine::renderBoard(float pulse) {
                 renderer_.drawRect(enemyX, enemyY - barrel, length, barrel * 2.0f, secondaryColor);
                 renderer_.drawCircle(enemyX, enemyY, 0.2f * tileSize_, secondaryColor, 18);
                 renderer_.drawRect(enemyX - front + tileSize_ * 0.08f, enemyY - side + tileSize_ * 0.06f, tileSize_ * 0.32f, tileSize_ * 0.14f, rgba(255, 255, 255, 22));
-            } else if (enemy.archetypeId == "taunt") {
+            } else if (enemy.archetype == EnemyArchetypeId::Taunt) {
                 const float edge = enemy.radius * tileSize_ * 0.5f;
                 renderer_.drawRect(enemyX - edge, enemyY - edge, enemy.radius * tileSize_, enemy.radius * tileSize_, rgba(0, 0, 0, 180));
                 renderer_.drawRect(enemyX - edge + tileSize_ * 0.02f, enemyY - edge + tileSize_ * 0.02f, enemy.radius * tileSize_ - tileSize_ * 0.04f, enemy.radius * tileSize_ - tileSize_ * 0.04f, primaryColor);
@@ -1626,18 +1655,77 @@ void NativeEngine::renderBoard(float pulse) {
         }
     }
 
+    if (config_.effects) {
+        for (const EnemyDeathEffect &effect : enemyDeathEffects_) {
+            if (!effect.alive || effect.duration <= 0.0f) {
+                continue;
+            }
+            const float progress = std::clamp(effect.age / effect.duration, 0.0f, 1.0f);
+            const float fade = 1.0f - progress;
+            const float size = effect.size * (0.88f + progress * 0.16f);
+            const float half = size * 0.5f;
+            const float shutterDepth = std::max(tileSize_ * 0.08f, size * 0.22f * fade);
+            const float shutterTravel = size * 0.16f * progress;
+            const int frameAlpha = static_cast<int>(170.0f * fade);
+            const int panelAlpha = static_cast<int>(220.0f * fade);
+            const int glowAlpha = static_cast<int>(90.0f * fade);
+            renderer_.drawRect(
+                effect.x - half - tileSize_ * 0.02f,
+                effect.y - half - tileSize_ * 0.02f,
+                size + tileSize_ * 0.04f,
+                size + tileSize_ * 0.04f,
+                rgba(18, 18, 18, frameAlpha)
+            );
+            renderer_.drawRect(
+                effect.x - half + tileSize_ * 0.02f,
+                effect.y - half + tileSize_ * 0.02f,
+                size - tileSize_ * 0.04f,
+                size - tileSize_ * 0.04f,
+                rgba(effect.primaryR, effect.primaryG, effect.primaryB, glowAlpha)
+            );
+            renderer_.drawRect(
+                effect.x - half,
+                effect.y - half - shutterTravel,
+                size,
+                shutterDepth,
+                rgba(effect.secondaryR, effect.secondaryG, effect.secondaryB, panelAlpha)
+            );
+            renderer_.drawRect(
+                effect.x - half,
+                effect.y + half - shutterDepth + shutterTravel,
+                size,
+                shutterDepth,
+                rgba(effect.secondaryR, effect.secondaryG, effect.secondaryB, panelAlpha)
+            );
+            renderer_.drawRect(
+                effect.x - half - shutterTravel,
+                effect.y - half,
+                shutterDepth,
+                size,
+                rgba(effect.primaryR, effect.primaryG, effect.primaryB, panelAlpha)
+            );
+            renderer_.drawRect(
+                effect.x + half - shutterDepth + shutterTravel,
+                effect.y - half,
+                shutterDepth,
+                size,
+                rgba(effect.primaryR, effect.primaryG, effect.primaryB, panelAlpha)
+            );
+        }
+    }
+
     for (const TowerInstance &tower : towers_) {
         if (!tower.alive) {
             continue;
         }
-        const TowerVisual style = towerVisual(tower.kind);
+        const TowerVisual style = towerVisual(tower.kindId);
         const float cx = tileCenterX(tower.col);
         const float cy = tileCenterY(tower.row);
         if (style.drawLine && tower.flash > 0.02f) {
-            const bool laserFamily = tower.kind == "laser" || tower.kind == "beamEmitter";
-            const bool teslaFamily = tower.kind == "tesla" || tower.kind == "plasma";
+            const bool laserFamily = tower.kindId == TowerKindId::Laser || tower.kindId == TowerKindId::BeamEmitter;
+            const bool teslaFamily = tower.kindId == TowerKindId::Tesla || tower.kindId == TowerKindId::Plasma;
             const int lineAlpha = laserFamily ? 255 : 220;
-            const float lineWeight = tower.kind == "beamEmitter" ? 3.0f : (tower.kind == "railgun" ? 4.0f : (teslaFamily ? 7.0f : 2.0f));
+            const float lineWeight = tower.kindId == TowerKindId::BeamEmitter ? 3.0f : (tower.kindId == TowerKindId::Railgun ? 4.0f : (teslaFamily ? 7.0f : 2.0f));
             if (teslaFamily) {
                 const float midX = (cx + tower.beamTargetX) * 0.5f + tileSize_ * 0.12f;
                 const float midY = (cy + tower.beamTargetY) * 0.5f - tileSize_ * 0.12f;
@@ -1647,7 +1735,7 @@ void NativeEngine::renderBoard(float pulse) {
                 renderer_.drawLine(cx, cy, tower.beamTargetX, tower.beamTargetY, lineWeight, rgba(style.color.r, style.color.g, style.color.b, lineAlpha));
             }
         }
-        if ((tower.kind == "slow" || tower.kind == "poison") && tower.flash > 0.02f) {
+        if ((tower.kindId == TowerKindId::Slow || tower.kindId == TowerKindId::Poison) && tower.flash > 0.02f) {
             const float r = (tower.range * 2.0f + 1.0f) * tileSize_;
             renderer_.drawRect(cx - r * 0.5f, cy - r * 0.5f, r, r, rgba(style.color.r, style.color.g, style.color.b, 70));
         }
@@ -1730,7 +1818,7 @@ void NativeEngine::renderBoard(float pulse) {
     }
 
     if (buildMode_ && hoveredCol_ >= 0 && hoveredRow_ >= 0) {
-        const TowerVisual style = towerVisual(buildTowerKind_);
+        const TowerVisual style = towerVisual(parseTowerKindId(buildTowerKind_));
         const Point2D c = tileCenter(hoveredCol_, hoveredRow_);
         const float radius = ((findTowerCatalogEntry(buildTowerKind_) != nullptr ? findTowerCatalogEntry(buildTowerKind_)->range : 3.0f) + 0.5f) * tileSize_;
         renderer_.drawRect(c.x - radius, c.y - radius, radius * 2.0f, radius * 2.0f, rgba(style.color.r, style.color.g, style.color.b, 16));
@@ -1751,7 +1839,7 @@ void NativeEngine::renderBoard(float pulse) {
             renderer_.drawLine(c.x + tileSize_ * 0.32f, c.y - tileSize_ * 0.32f, c.x - tileSize_ * 0.32f, c.y + tileSize_ * 0.32f, tileSize_ * 0.1f, rgba(176, 86, 62, 180));
         }
     } else if (selectedTower != nullptr) {
-        const TowerVisual style = towerVisual(selectedTower->kind);
+        const TowerVisual style = towerVisual(selectedTower->kindId);
         const float cx = tileCenterX(selectedTower->col);
         const float cy = tileCenterY(selectedTower->row);
         const float radius = (selectedTower->range + 0.5f) * tileSize_;
@@ -1919,6 +2007,7 @@ void NativeEngine::loadMapById(const std::string &mapId) {
     projectiles_.clear();
     explosions_.clear();
     trailParticles_.clear();
+    enemyDeathEffects_.clear();
     tempSpawns_.clear();
     clearPlacementCountdown();
     health_ = 40;
@@ -2044,6 +2133,7 @@ int NativeEngine::pathAt(int col, int row) const {
 void NativeEngine::spawnEnemyAt(int spawnCol, int spawnRow, const std::string &archetypeId) {
     EnemyBlueprint blueprint;
     if (const EnemyArchetypeSpec *enemySpec = findEnemyArchetype(archetypeId)) {
+        blueprint.archetype = enemySpec->archetype;
         blueprint.baseSpeed = enemySpec->speed;
         blueprint.radius = enemySpec->radius;
         blueprint.health = enemySpec->health;
@@ -2062,7 +2152,6 @@ void NativeEngine::spawnEnemyAt(int spawnCol, int spawnRow, const std::string &a
         tileSize_,
         blueprint
     ));
-    enemies_.back().archetypeId = archetypeId;
 }
 
 void NativeEngine::processEnemyKilled(EnemyInstance &enemy) {
@@ -2072,10 +2161,26 @@ void NativeEngine::processEnemyKilled(EnemyInstance &enemy) {
     enemy.alive = false;
     cash_ += enemy.cash;
     kills_++;
-    lastSound_ = enemy.archetypeId == "taunt" ? "taunt" : "pop";
-    soundNonce_++;
+    queueAudioEvent(enemy.archetype == EnemyArchetypeId::Taunt ? SoundType::Taunt : SoundType::Pop);
+    if (config_.effects) {
+        const EnemyPalette palette = enemyPaletteFor(enemy.archetype, enemy.slowTicks > 0);
+        enemyDeathEffects_.push_back(EnemyDeathEffect{
+            enemy.x,
+            enemy.y,
+            std::max(tileSize_ * 0.72f, enemy.radius * tileSize_ * 1.2f),
+            0.0f,
+            10.0f,
+            palette.primary.r,
+            palette.primary.g,
+            palette.primary.b,
+            palette.secondary.r,
+            palette.secondary.g,
+            palette.secondary.b,
+            true,
+        });
+    }
 
-    if (enemy.archetypeId == "spawner") {
+    if (enemy.archetype == EnemyArchetypeId::Spawner) {
         int col = 0;
         int row = 0;
         if (!boardPointToTile(enemy.x, enemy.y, &col, &row)) {
@@ -2107,7 +2212,7 @@ void NativeEngine::updateEnemies() {
         }
         if (enemy.poisonTicks > 0) {
             enemy.poisonTicks--;
-            const float multiplier = damageMultiplierFor(enemy.archetypeId, "poison");
+            const float multiplier = damageMultiplierFor(enemy.archetype, "poison");
             if (multiplier > 0.0f) {
                 enemy.hitFlash = std::min(1.0f, enemy.hitFlash + 0.45f);
                 enemy.health -= 1.0f * multiplier;
@@ -2433,7 +2538,7 @@ void NativeEngine::updateTowers() {
     };
 
     const auto dealDamage = [this, &markEnemyKilled](EnemyInstance &enemy, float amount, std::string_view damageType) {
-        const float multiplier = damageMultiplierFor(enemy.archetypeId, damageType);
+        const float multiplier = damageMultiplierFor(enemy.archetype, damageType);
         if (multiplier <= 0.0f) {
             return;
         }
@@ -2484,7 +2589,7 @@ void NativeEngine::updateTowers() {
                 continue;
             }
             towerCandidatesScratch_.push_back(static_cast<int>(index));
-            if (enemy.archetypeId == "taunt") {
+            if (enemy.archetype == EnemyArchetypeId::Taunt) {
                 towerTauntsScratch_.push_back(static_cast<int>(index));
             }
         }
@@ -2495,7 +2600,7 @@ void NativeEngine::updateTowers() {
             continue;
         }
 
-        if (tower.kind == "slow" || tower.kind == "poison") {
+        if (tower.kindId == TowerKindId::Slow || tower.kindId == TowerKindId::Poison) {
             const EnemyInstance &visualTarget = enemies_[static_cast<size_t>(candidates.front())];
             tower.angle = std::atan2(visualTarget.y - centerY, visualTarget.x - centerX);
             tower.beamTargetX = visualTarget.x;
@@ -2506,14 +2611,14 @@ void NativeEngine::updateTowers() {
             prepareTowerFireState(tower, visualTarget, boardLeft_, boardTop_, tileSize_, rollCooldown(tower), 0);
             for (int index : candidates) {
                 EnemyInstance &enemy = enemies_[static_cast<size_t>(index)];
-                if (tower.kind == "slow") {
-                    if (damageMultiplierFor(enemy.archetypeId, "slow") <= 0.0f) {
+                if (tower.kindId == TowerKindId::Slow) {
+                    if (damageMultiplierFor(enemy.archetype, "slow") <= 0.0f) {
                         continue;
                     }
                     enemy.slowFactor = 0.55f;
                     enemy.slowTicks = std::max(enemy.slowTicks, 40);
                 } else {
-                    if (damageMultiplierFor(enemy.archetypeId, "poison") <= 0.0f) {
+                    if (damageMultiplierFor(enemy.archetype, "poison") <= 0.0f) {
                         continue;
                     }
                     enemy.poisonTicks = std::max(enemy.poisonTicks, 60);
@@ -2523,7 +2628,7 @@ void NativeEngine::updateTowers() {
         }
 
         int targetIndex = -1;
-        if (tower.kind == "rocket" || tower.kind == "missileSilo") {
+        if (tower.kindId == TowerKindId::Rocket || tower.kindId == TowerKindId::MissileSilo) {
             float bestDistance = 1e30f;
             for (int index : candidates) {
                 const EnemyInstance &enemy = enemies_[static_cast<size_t>(index)];
@@ -2535,7 +2640,7 @@ void NativeEngine::updateTowers() {
                     targetIndex = index;
                 }
             }
-        } else if (tower.kind == "sniper" || tower.kind == "railgun" || tower.targetingMode == TargetingMode::Strongest) {
+        } else if (tower.kindId == TowerKindId::Sniper || tower.kindId == TowerKindId::Railgun || tower.targetingMode == TargetingMode::Strongest) {
             float bestHealth = -1.0f;
             for (int index : candidates) {
                 const EnemyInstance &enemy = enemies_[static_cast<size_t>(index)];
@@ -2576,9 +2681,9 @@ void NativeEngine::updateTowers() {
         tower.angle = std::atan2(enemy.y - centerY, enemy.x - centerX);
         tower.beamTargetX = enemy.x;
         tower.beamTargetY = enemy.y;
-        const std::string_view damageType = damageTypeForTower(tower.kind);
+        const std::string_view damageType = damageTypeForTower(tower.kindId);
 
-        if (tower.kind == "beamEmitter") {
+        if (tower.kindId == TowerKindId::BeamEmitter) {
             if (tower.lastTargetEnemyId == enemy.id) {
                 tower.beamChargeTicks++;
             } else {
@@ -2596,7 +2701,7 @@ void NativeEngine::updateTowers() {
 
         prepareTowerFireState(tower, enemy, boardLeft_, boardTop_, tileSize_, rollCooldown(tower));
 
-        if (tower.kind == "rocket" || tower.kind == "missileSilo") {
+        if (tower.kindId == TowerKindId::Rocket || tower.kindId == TowerKindId::MissileSilo) {
             ProjectileInstance projectile;
             projectile.x = centerX;
             projectile.y = centerY;
@@ -2604,20 +2709,19 @@ void NativeEngine::updateTowers() {
             projectile.prevY = centerY;
             projectile.damageMin = tower.damageMin;
             projectile.damageMax = tower.damageMax;
-            projectile.splashRadius = tower.kind == "missileSilo" ? 2.0f : 1.0f;
-            projectile.accAmt = (tower.kind == "missileSilo" ? 0.7f : 0.6f) * tileSize_ / 24.0f;
-            projectile.topSpeed = (tower.kind == "missileSilo" ? 6.0f : 4.0f) * tileSize_ / 24.0f;
+            projectile.splashRadius = tower.kindId == TowerKindId::MissileSilo ? 2.0f : 1.0f;
+            projectile.accAmt = (tower.kindId == TowerKindId::MissileSilo ? 0.7f : 0.6f) * tileSize_ / 24.0f;
+            projectile.topSpeed = (tower.kindId == TowerKindId::MissileSilo ? 6.0f : 4.0f) * tileSize_ / 24.0f;
             projectile.lifetime = 60;
             projectile.trailCooldown = 0;
             projectile.range = tower.range;
             projectile.targetEnemyId = enemy.id;
             projectiles_.push_back(projectile);
-            lastSound_ = "missile";
-            soundNonce_++;
+            queueAudioEvent(SoundType::Missile);
             continue;
         }
 
-        if (tower.kind == "bomb") {
+        if (tower.kindId == TowerKindId::Bomb) {
             const float blastRange = (1.0f + 1.0f) * tileSize_;
             const float blastRangeSquared = blastRange * blastRange;
             for (EnemyInstance &other : enemies_) {
@@ -2635,12 +2739,11 @@ void NativeEngine::updateTowers() {
                 dealDamage(other, rollDamage(tower) * falloff, damageType);
             }
             explosions_.push_back(towerdefense::spawnExplosion(enemy.x, enemy.y, 1.0f));
-            lastSound_ = "boom";
-            soundNonce_++;
+            queueAudioEvent(SoundType::Boom);
             continue;
         }
 
-        if (tower.kind == "clusterBomb") {
+        if (tower.kindId == TowerKindId::ClusterBomb) {
             explosions_.push_back(towerdefense::spawnExplosion(enemy.x, enemy.y, 1.0f));
             static std::mt19937 rng(std::random_device{}());
             std::uniform_real_distribution<float> angleDist(0.0f, 6.28318530718f);
@@ -2665,19 +2768,17 @@ void NativeEngine::updateTowers() {
                     dealDamage(other, rollDamage(tower) * falloff, damageType);
                 }
             }
-            lastSound_ = "boom";
-            soundNonce_++;
+            queueAudioEvent(SoundType::Boom);
             continue;
         }
 
-        if (tower.kind == "railgun") {
+        if (tower.kindId == TowerKindId::Railgun) {
             dealDamage(enemy, rollDamage(tower), damageType);
-            lastSound_ = "railgun";
-            soundNonce_++;
+            queueAudioEvent(SoundType::Railgun);
             continue;
         }
 
-        if (tower.kind == "tesla" || tower.kind == "plasma") {
+        if (tower.kindId == TowerKindId::Tesla || tower.kindId == TowerKindId::Plasma) {
             towerChainScratch_.clear();
             int chainIndex = targetIndex;
             float damage = rollDamage(tower);
@@ -2705,12 +2806,11 @@ void NativeEngine::updateTowers() {
                 damage *= 0.5f;
                 chainCount++;
             }
-            lastSound_ = "spark";
-            soundNonce_++;
+            queueAudioEvent(SoundType::Spark);
             continue;
         }
 
-        if (tower.kind == "beamEmitter") {
+        if (tower.kindId == TowerKindId::BeamEmitter) {
             const float baseDamage = std::max(1.0f, randomRange(tower.damageMin, tower.damageMax));
             const float charge = static_cast<float>(std::max(1, tower.beamChargeTicks));
             dealDamage(enemy, baseDamage * charge * charge, damageType);
@@ -2718,9 +2818,8 @@ void NativeEngine::updateTowers() {
         }
 
         dealDamage(enemy, rollDamage(tower), damageType);
-        if (tower.kind == "sniper") {
-            lastSound_ = "sniper";
-            soundNonce_++;
+        if (tower.kindId == TowerKindId::Sniper) {
+            queueAudioEvent(SoundType::Sniper);
         }
     }
 }
@@ -2783,7 +2882,7 @@ void NativeEngine::updateProjectiles() {
             }
             const float dist = std::sqrt(distanceSquared);
             const float falloff = std::clamp(1.0f - dist / ((impact.splashRadius + 1.0f) * tileSize_), 0.2f, 1.0f);
-            const float multiplier = damageMultiplierFor(enemy.archetypeId, "explosion");
+            const float multiplier = damageMultiplierFor(enemy.archetype, "explosion");
             if (multiplier <= 0.0f) {
                 continue;
             }
@@ -2794,8 +2893,7 @@ void NativeEngine::updateProjectiles() {
             }
         }
         explosions_.push_back(towerdefense::spawnExplosion(impact.x, impact.y, impact.splashRadius));
-        lastSound_ = "boom";
-        soundNonce_++;
+        queueAudioEvent(SoundType::Boom);
     }
 
     for (EnemyInstance &enemy : enemies_) {
@@ -2841,6 +2939,27 @@ void NativeEngine::updateTrailParticles() {
             [](const TrailParticleInstance &particle) { return !particle.alive; }
         ),
         trailParticles_.end()
+    );
+}
+
+void NativeEngine::updateEnemyDeathEffects() {
+    for (EnemyDeathEffect &effect : enemyDeathEffects_) {
+        if (!effect.alive) {
+            continue;
+        }
+        effect.age += 1.0f;
+        if (effect.age >= effect.duration) {
+            effect.alive = false;
+        }
+    }
+
+    enemyDeathEffects_.erase(
+        std::remove_if(
+            enemyDeathEffects_.begin(),
+            enemyDeathEffects_.end(),
+            [](const EnemyDeathEffect &effect) { return !effect.alive; }
+        ),
+        enemyDeathEffects_.end()
     );
 }
 

@@ -1,7 +1,6 @@
 #ifndef TOWERDEFENSE_ENEMY_BEHAVIORS_H
 #define TOWERDEFENSE_ENEMY_BEHAVIORS_H
 
-#include <string_view>
 #include <vector>
 
 #include "GameRuntimeTypes.h"
@@ -27,8 +26,8 @@ struct MedicHealEvent {
     float amount = 0.0f;
 };
 
-bool isMedicBehavior(std::string_view archetypeId);
-EnemyBehaviorKind behaviorKindForArchetype(std::string_view archetypeId);
+bool isMedicBehavior(EnemyArchetypeId archetypeId);
+EnemyBehaviorKind behaviorKindForArchetype(EnemyArchetypeId archetypeId);
 
 MedicSupportState makeMedicSupportState(
     int healIntervalTicks = 90,

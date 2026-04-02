@@ -6,6 +6,7 @@ namespace {
 
 constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
     {
+        TowerKindId::Gun,
         "gun",
         "Gun Tower",
         25,
@@ -19,9 +20,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF567060,
         true,
         "Targets the leading enemy",
+        TowerKindId::MachineGun,
         "machineGun",
     },
     {
+        TowerKindId::MachineGun,
         "machineGun",
         "Machine Gun",
         75,
@@ -35,9 +38,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF56767E,
         false,
         "Targets the leading enemy",
+        TowerKindId::Unknown,
         "",
     },
     {
+        TowerKindId::Laser,
         "laser",
         "Laser Tower",
         75,
@@ -51,9 +56,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF787853,
         true,
         "Targets the leading enemy",
+        TowerKindId::BeamEmitter,
         "beamEmitter",
     },
     {
+        TowerKindId::BeamEmitter,
         "beamEmitter",
         "Beam Emitter",
         200,
@@ -67,9 +74,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF959B6B,
         false,
         "Targets the leading enemy",
+        TowerKindId::Unknown,
         "",
     },
     {
+        TowerKindId::Slow,
         "slow",
         "Slow Tower",
         100,
@@ -83,9 +92,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF606E62,
         true,
         "Affects all enemies in range",
+        TowerKindId::Poison,
         "poison",
     },
     {
+        TowerKindId::Poison,
         "poison",
         "Poison Tower",
         150,
@@ -99,9 +110,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF568072,
         false,
         "Affects all enemies in range",
+        TowerKindId::Unknown,
         "",
     },
     {
+        TowerKindId::Sniper,
         "sniper",
         "Sniper Tower",
         150,
@@ -115,9 +128,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF5A666C,
         true,
         "Targets the strongest visible enemy",
+        TowerKindId::Railgun,
         "railgun",
     },
     {
+        TowerKindId::Railgun,
         "railgun",
         "Railgun",
         300,
@@ -131,9 +146,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF665A55,
         false,
         "Targets the strongest visible enemy",
+        TowerKindId::Unknown,
         "",
     },
     {
+        TowerKindId::Rocket,
         "rocket",
         "Rocket Tower",
         250,
@@ -147,9 +164,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF52725E,
         true,
         "Targets the nearest valid enemy within range",
+        TowerKindId::MissileSilo,
         "missileSilo",
     },
     {
+        TowerKindId::MissileSilo,
         "missileSilo",
         "Missile Silo",
         250,
@@ -163,9 +182,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF8A7E70,
         false,
         "Targets the nearest valid enemy within range",
+        TowerKindId::Unknown,
         "",
     },
     {
+        TowerKindId::Bomb,
         "bomb",
         "Bomb Tower",
         250,
@@ -179,9 +200,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF526167,
         true,
         "Targets the leading enemy",
+        TowerKindId::ClusterBomb,
         "clusterBomb",
     },
     {
+        TowerKindId::ClusterBomb,
         "clusterBomb",
         "Cluster Bomb",
         250,
@@ -195,9 +218,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFF616752,
         false,
         "Targets the leading enemy",
+        TowerKindId::Unknown,
         "",
     },
     {
+        TowerKindId::Tesla,
         "tesla",
         "Tesla Coil",
         350,
@@ -211,9 +236,11 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFFC6BCA8,
         true,
         "Targets the leading enemy, then chains",
+        TowerKindId::Plasma,
         "plasma",
     },
     {
+        TowerKindId::Plasma,
         "plasma",
         "Plasma Tower",
         250,
@@ -227,6 +254,7 @@ constexpr std::array<TowerCatalogEntry, 14> kTowerCatalogEntries = {{
         0xFFD6C68E,
         false,
         "Targets the leading enemy, then chains",
+        TowerKindId::Unknown,
         "",
     },
 }};
@@ -246,12 +274,29 @@ const TowerCatalogEntry *findTowerCatalogEntry(std::string_view kindId) {
     return nullptr;
 }
 
+const TowerCatalogEntry *findTowerCatalogEntry(TowerKindId kindId) {
+    for (const TowerCatalogEntry &entry : kTowerCatalogEntries) {
+        if (entry.kind == kindId) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
 const TowerCatalogEntry *findNextTowerUpgrade(std::string_view kindId) {
     const TowerCatalogEntry *entry = findTowerCatalogEntry(kindId);
     if (entry == nullptr || entry->nextUpgradeKindId.empty()) {
         return nullptr;
     }
     return findTowerCatalogEntry(entry->nextUpgradeKindId);
+}
+
+const TowerCatalogEntry *findNextTowerUpgrade(TowerKindId kindId) {
+    const TowerCatalogEntry *entry = findTowerCatalogEntry(kindId);
+    if (entry == nullptr || entry->nextUpgradeKind == TowerKindId::Unknown) {
+        return nullptr;
+    }
+    return findTowerCatalogEntry(entry->nextUpgradeKind);
 }
 
 }  // namespace towerdefense

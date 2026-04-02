@@ -15,11 +15,11 @@ float distanceSquared(float ax, float ay, float bx, float by) {
 
 }  // namespace
 
-bool isMedicBehavior(std::string_view archetypeId) {
-    return archetypeId == "medic";
+bool isMedicBehavior(EnemyArchetypeId archetypeId) {
+    return archetypeId == EnemyArchetypeId::Medic;
 }
 
-EnemyBehaviorKind behaviorKindForArchetype(std::string_view archetypeId) {
+EnemyBehaviorKind behaviorKindForArchetype(EnemyArchetypeId archetypeId) {
     return isMedicBehavior(archetypeId) ? EnemyBehaviorKind::Medic : EnemyBehaviorKind::None;
 }
 

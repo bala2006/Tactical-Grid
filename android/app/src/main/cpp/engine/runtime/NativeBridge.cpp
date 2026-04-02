@@ -2,20 +2,6 @@
 
 #include "NativeEngine.h"
 
-namespace {
-std::string toString(JNIEnv *env, jstring value) {
-    if (value == nullptr) {
-        return {};
-    }
-    const char *chars = env->GetStringUTFChars(value, nullptr);
-    std::string result = chars == nullptr ? std::string() : std::string(chars);
-    if (chars != nullptr) {
-        env->ReleaseStringUTFChars(value, chars);
-    }
-    return result;
-}
-}
-
 extern "C" JNIEXPORT void JNICALL
 Java_com_sekhar_towerdefense_NativeBridge_nativeOnSurfaceCreated(JNIEnv *, jobject) {
     NativeEngine::instance().onSurfaceCreated();
@@ -29,21 +15,6 @@ Java_com_sekhar_towerdefense_NativeBridge_nativeOnSurfaceChanged(JNIEnv *, jobje
 extern "C" JNIEXPORT void JNICALL
 Java_com_sekhar_towerdefense_NativeBridge_nativeOnDrawFrame(JNIEnv *, jobject) {
     NativeEngine::instance().onDrawFrame();
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_sekhar_towerdefense_NativeBridge_nativeHandlePointer(JNIEnv *, jobject, jfloat xPx, jfloat yPx, jint phase) {
-    NativeEngine::instance().onPointer(xPx, yPx, phase);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_sekhar_towerdefense_NativeBridge_nativeSetActiveScreen(JNIEnv *, jobject, jint screenId) {
-    NativeEngine::instance().setActiveScreen(screenId);
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_sekhar_towerdefense_NativeBridge_nativeInvokeAction(JNIEnv *env, jobject, jstring actionId, jstring payload) {
-    return NativeEngine::instance().invokeAction(toString(env, actionId), toString(env, payload)) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -71,8 +42,21 @@ Java_com_sekhar_towerdefense_NativeBridge_nativeHandleBoardDrag(JNIEnv *, jobjec
     NativeEngine::instance().handleBoardDrag(xPx, yPx, phase);
 }
 
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_sekhar_towerdefense_NativeBridge_nativeConsumeUiSnapshot(JNIEnv *env, jobject) {
-    const std::string snapshot = NativeEngine::instance().consumeUiSnapshot();
-    return env->NewStringUTF(snapshot.c_str());
+extern "C" const towerdefense::NativeGameSnapshot *nativeGetGameSnapshot() {
+    return &NativeEngine::instance().snapshot();
+}
+
+extern "C" int nativeConsumeAudioEvents(towerdefense::NativeAudioEvent *buffer, int maxEvents) {
+    return NativeEngine::instance().consumeAudioEvents(buffer, maxEvents);
+}
+
+extern "C" void nativeSetActiveScreenFfi(int screenId) {
+    NativeEngine::instance().setActiveScreen(screenId);
+}
+
+extern "C" bool nativeInvokeActionFfi(const char *actionId, const char *payload) {
+    return NativeEngine::instance().invokeAction(
+        actionId == nullptr ? std::string() : std::string(actionId),
+        payload == nullptr ? std::string() : std::string(payload)
+    );
 }

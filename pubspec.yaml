@@ -11,8 +11,10 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
+  ffi: ^2.1.4
   flame: ^1.34.0
   flame_audio: ^2.11.12
+  path_provider: ^2.1.5
   url_launcher: ^6.3.2
 
 dev_dependencies:

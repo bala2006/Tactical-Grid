@@ -9,6 +9,7 @@
 namespace towerdefense {
 
 struct EnemyBlueprint {
+    EnemyArchetypeId archetype = EnemyArchetypeId::Weak;
     float baseSpeed = 1.0f;
     float radius = 0.38f;
     float health = 18.0f;

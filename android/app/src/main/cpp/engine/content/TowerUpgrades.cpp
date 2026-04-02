@@ -12,17 +12,27 @@ const TowerCatalogEntry *nextTowerUpgrade(std::string_view kindId) {
     return findNextTowerUpgrade(kindId);
 }
 
+const TowerCatalogEntry *nextTowerUpgrade(TowerKindId kindId) {
+    return findNextTowerUpgrade(kindId);
+}
+
 int computeUpgradePrice(std::string_view kindId) {
     const TowerCatalogEntry *entry = nextTowerUpgrade(kindId);
     return entry != nullptr ? entry->cost : 0;
 }
 
+int computeUpgradePrice(TowerKindId kindId) {
+    const TowerCatalogEntry *entry = nextTowerUpgrade(kindId);
+    return entry != nullptr ? entry->cost : 0;
+}
+
 bool applyTowerUpgrade(TowerRuntime &tower) {
-    const TowerCatalogEntry *entry = nextTowerUpgrade(tower.kind);
+    const TowerCatalogEntry *entry = nextTowerUpgrade(tower.kindId);
     if (entry == nullptr) {
         return false;
     }
 
+    tower.kindId = entry->kind;
     tower.kind = std::string(entry->kindId);
     tower.cooldownMin = entry->cooldownMin;
     tower.cooldownMax = entry->cooldownMax;
@@ -38,7 +48,7 @@ bool applyTowerUpgrade(TowerRuntime &tower) {
     tower.beamTicks = 0;
     tower.lastTargetEnemyId = -1;
     tower.beamChargeTicks = 0;
-    if (tower.kind == "slow") {
+    if (tower.kindId == TowerKindId::Slow) {
         tower.slowFactor = 0.5f;
         tower.slowTicks = 40;
     } else {

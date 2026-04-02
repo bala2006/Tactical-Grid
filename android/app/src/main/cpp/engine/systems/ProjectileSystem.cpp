@@ -40,7 +40,7 @@ int findNearestEnemyIndex(
         if (distanceSquared > rangePx * rangePx) {
             continue;
         }
-        if (enemy.archetypeId == "taunt") {
+        if (enemy.archetype == EnemyArchetypeId::Taunt) {
             taunts.push_back(static_cast<int>(index));
         }
     }

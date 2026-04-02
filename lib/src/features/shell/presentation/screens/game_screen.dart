@@ -120,10 +120,7 @@ class _GameScreenState extends State<GameScreen> {
           const SizedBox(height: 10),
           Text(
             compactDelta,
-            style: const TextStyle(
-              color: Color(0xFF9CCEFF),
-              fontSize: 10,
-            ),
+            style: const TextStyle(color: Color(0xFF9CCEFF), fontSize: 10),
           ),
           const SizedBox(height: 8),
           Text(
@@ -313,37 +310,49 @@ class _GameScreenState extends State<GameScreen> {
                           child: ValueListenableBuilder<AppUiState>(
                             valueListenable:
                                 widget.controller.uiStateListenable,
-                            builder: (
-                              BuildContext context,
-                              AppUiState state,
-                              _,
-                            ) {
-                              return Stack(
-                                children: <Widget>[
-                                  if (state.performance.fps > 0 &&
-                                      widget.controller.config.devFlags.showFps)
-                                    Positioned(
-                                      left: 8,
-                                      top: 8,
-                                      child: _PerfChip(
-                                        stats: state.performance,
-                                      ),
-                                    ),
-                                  if (state.defeat)
-                                    Positioned.fill(
-                                      child: ColoredBox(
-                                        color: Colors.black54,
-                                        child: Center(
-                                          child: _DefeatCard(
-                                            controller: widget.controller,
-                                            state: state,
+                            builder:
+                                (BuildContext context, AppUiState state, _) {
+                                  return Stack(
+                                    children: <Widget>[
+                                      if (widget
+                                          .controller
+                                          .isNativeBoardEnabled)
+                                        _NativePlacementOverlay(
+                                          state: state,
+                                          onCancel:
+                                              widget.controller.cancelPlacement,
+                                          onPlace: widget
+                                              .controller
+                                              .confirmPendingPlacement,
+                                        ),
+                                      if (state.performance.fps > 0 &&
+                                          widget
+                                              .controller
+                                              .config
+                                              .devFlags
+                                              .showFps)
+                                        Positioned(
+                                          left: 8,
+                                          top: 8,
+                                          child: _PerfChip(
+                                            stats: state.performance,
                                           ),
                                         ),
-                                      ),
-                                    ),
-                                ],
-                              );
-                            },
+                                      if (state.defeat)
+                                        Positioned.fill(
+                                          child: ColoredBox(
+                                            color: Colors.black54,
+                                            child: Center(
+                                              child: _DefeatCard(
+                                                controller: widget.controller,
+                                                state: state,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  );
+                                },
                           ),
                         ),
                       ],
@@ -508,10 +517,7 @@ class _HudMetricView extends StatelessWidget {
 }
 
 class _TowerRail extends StatelessWidget {
-  const _TowerRail({
-    required this.controller,
-    required this.onBackToMap,
-  });
+  const _TowerRail({required this.controller, required this.onBackToMap});
   final GameController controller;
   final VoidCallback onBackToMap;
 
@@ -538,10 +544,7 @@ class _TowerRail extends StatelessWidget {
             child: Text(
               '← Back',
               maxLines: 1,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
             ),
           ),
         ),
@@ -557,7 +560,10 @@ class _TowerRail extends StatelessWidget {
                 children: <Widget>[
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFF16344D),
                       borderRadius: BorderRadius.circular(14),
@@ -589,14 +595,17 @@ class _TowerRail extends StatelessWidget {
                     child: ValueListenableBuilder<AppUiState>(
                       valueListenable: controller.uiStateListenable,
                       builder: (BuildContext context, AppUiState state, _) {
-                        final bool isPlacing = state.selectionStatus.startsWith('Placing: ');
+                        final bool isPlacing = state.selectionStatus.startsWith(
+                          'Placing: ',
+                        );
                         final String? selectedTitle = isPlacing
                             ? state.selectionInfo?.title
                             : null;
                         return ListView.separated(
                           padding: EdgeInsets.zero,
                           itemCount: controller.storeBlueprints.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 6),
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 6),
                           itemBuilder: (BuildContext context, int index) {
                             final TowerBlueprint blueprint =
                                 controller.storeBlueprints[index];
@@ -614,7 +623,9 @@ class _TowerRail extends StatelessWidget {
                                 : const Color(0xFF8EB8D7);
                             return FilledButton.tonal(
                               onPressed: () async {
-                                await controller.selectBuildTower(blueprint.kind);
+                                await controller.selectBuildTower(
+                                  blueprint.kind,
+                                );
                               },
                               style: FilledButton.styleFrom(
                                 backgroundColor: backgroundColor,
@@ -899,10 +910,7 @@ class _TimedDecisionDialogState extends State<_TimedDecisionDialog> {
             const SizedBox(height: 16),
             Text(
               'Decision timeout: ${_secondsLeft}s',
-              style: const TextStyle(
-                color: Color(0xFFFFC16B),
-                fontSize: 10,
-              ),
+              style: const TextStyle(color: Color(0xFFFFC16B), fontSize: 10),
             ),
           ],
         ),
@@ -935,4 +943,244 @@ class _TimedDecisionDialogState extends State<_TimedDecisionDialog> {
 String _extractUpgradeValue(String delta, String label, String fallback) {
   final RegExpMatch? match = RegExp('$label\\s+([^,]+)').firstMatch(delta);
   return match == null ? fallback : match.group(1)!.trim();
+}
+
+class _NativePlacementOverlay extends StatelessWidget {
+  const _NativePlacementOverlay({
+    required this.state,
+    required this.onCancel,
+    required this.onPlace,
+  });
+
+  final AppUiState state;
+  final VoidCallback onCancel;
+  final VoidCallback onPlace;
+
+  @override
+  Widget build(BuildContext context) {
+    final PendingPlacementInfo? pending = state.pendingPlacement;
+    if (pending == null || pending.id.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: false,
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            const double popupWidth = 168;
+            const double popupMinLeft = 8;
+            const double popupMinTop = 8;
+            const double popupBottomGap = 12;
+            const double estimatedPopupHeight = 74;
+
+            double clampDouble(double value, double lower, double upper) {
+              return value.clamp(lower, upper).toDouble();
+            }
+
+            final double maxLeft = clampDouble(
+              constraints.maxWidth - popupWidth - 8,
+              popupMinLeft,
+              constraints.maxWidth,
+            );
+            final double left = clampDouble(
+              pending.anchorX - popupWidth / 2,
+              popupMinLeft,
+              maxLeft,
+            );
+            final double maxTop = clampDouble(
+              constraints.maxHeight - estimatedPopupHeight - popupMinTop,
+              popupMinTop,
+              constraints.maxHeight,
+            );
+            final bool fitsAbove =
+                pending.anchorY - popupBottomGap - estimatedPopupHeight >=
+                popupMinTop;
+            final double preferredTop = fitsAbove
+                ? pending.anchorY - estimatedPopupHeight - popupBottomGap
+                : pending.anchorY + popupBottomGap;
+            final double top = clampDouble(preferredTop, popupMinTop, maxTop);
+
+            return Stack(
+              children: <Widget>[
+                Positioned(
+                  left: left,
+                  top: top,
+                  child: _PlacementPopupCard(
+                    title: pending.title,
+                    cost: pending.cost,
+                    selectionStatus: state.selectionStatus,
+                    placementReason: pending.statusText.isEmpty
+                        ? state.selectionInfo?.placementReason ?? ''
+                        : pending.statusText,
+                    secondsLeft: pending.remainingTicks <= 0
+                        ? null
+                        : ((pending.remainingTicks + 59) ~/ 60),
+                    canPlace: pending.showPlaceAction,
+                    onCancel: onCancel,
+                    onPlace: onPlace,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _PlacementPopupCard extends StatelessWidget {
+  const _PlacementPopupCard({
+    required this.title,
+    required this.cost,
+    required this.selectionStatus,
+    required this.placementReason,
+    required this.secondsLeft,
+    required this.canPlace,
+    required this.onCancel,
+    required this.onPlace,
+  });
+
+  final String title;
+  final double cost;
+  final String selectionStatus;
+  final String placementReason;
+  final int? secondsLeft;
+  final bool canPlace;
+  final VoidCallback onCancel;
+  final VoidCallback onPlace;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xF0122A45),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF2A5474)),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x66000000),
+            blurRadius: 16,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 108),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Flexible(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFFF5F9FF),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '\$${cost.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      color: Color(0xFF64FF8C),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                placementReason.isEmpty ? selectionStatus : placementReason,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF9CCEFF), fontSize: 8),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  if (secondsLeft != null) ...<Widget>[
+                    Text(
+                      '${secondsLeft}s',
+                      style: const TextStyle(
+                        color: Color(0xFFFFC16B),
+                        fontSize: 8,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  _PopupActionButton(
+                    label: 'Cancel',
+                    foregroundColor: const Color(0xFF9CCEFF),
+                    onPressed: onCancel,
+                  ),
+                  const SizedBox(width: 6),
+                  _PopupActionButton(
+                    label: 'Place',
+                    foregroundColor: const Color(0xFF072033),
+                    backgroundColor: canPlace
+                        ? const Color(0xFF79B9FF)
+                        : const Color(0xFF406782),
+                    onPressed: canPlace ? onPlace : null,
+                    bold: true,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PopupActionButton extends StatelessWidget {
+  const _PopupActionButton({
+    required this.label,
+    required this.foregroundColor,
+    required this.onPressed,
+    this.backgroundColor = Colors.transparent,
+    this.bold = false,
+  });
+
+  final String label;
+  final Color foregroundColor;
+  final Color backgroundColor;
+  final bool bold;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextStyle style = TextStyle(
+      color: foregroundColor,
+      fontSize: 8,
+      fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
+    );
+    return Material(
+      color: backgroundColor,
+      borderRadius: BorderRadius.circular(9),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(9),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          child: Text(label, style: style),
+        ),
+      ),
+    );
+  }
 }

@@ -3,6 +3,7 @@
 
 #include <GLES3/gl3.h>
 
+#include <cstdint>
 #include <vector>
 
 class GlRenderer2D {
@@ -39,10 +40,12 @@ private:
     struct Vertex {
         float x;
         float y;
-        float r;
-        float g;
-        float b;
-        float a;
+        uint32_t color;
+    };
+
+    struct CircleMesh {
+        std::vector<float> unitXs;
+        std::vector<float> unitYs;
     };
 
     void appendTriangle(
@@ -51,6 +54,7 @@ private:
         float cx, float cy,
         unsigned int color
     );
+    const CircleMesh &circleMeshForSegments(int segments);
 
     GLuint program_ = 0;
     GLuint vertexBuffer_ = 0;
@@ -59,6 +63,7 @@ private:
     int surfaceHeight_ = 0;
     GLsizeiptr vertexBufferCapacityBytes_ = 0;
     std::vector<Vertex> vertices_;
+    std::vector<CircleMesh> circleMeshes_;
 };
 
 #endif
