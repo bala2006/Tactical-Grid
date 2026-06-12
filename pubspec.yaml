@@ -1,6 +1,9 @@
-name: towerdefense
-description: "A new Flutter project."
-publish_to: 'none' 
+name: tactical-grid
+description: "Tactical-Grid - A Tower Defense Game built with Flutter and Flame engine"
+publish_to: 'https://github.com/bala2006/Tactical-Grid'
+homepage: https://github.com/bala2006/Tactical-Grid
+repository: https://github.com/bala2006/Tactical-Grid
+issue_tracker: https://github.com/bala2006/Tactical-Grid/issues
 version: 1.0.0+1
 
 environment:
