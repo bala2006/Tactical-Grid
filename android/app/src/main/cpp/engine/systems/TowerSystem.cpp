@@ -96,6 +96,25 @@ void decayTowerVisuals(TowerRuntime &tower, int cooldownStep) {
     tower.flash = std::max(0.0f, tower.flash - 0.16f);
     tower.recoil = std::max(0.0f, tower.recoil - 0.18f);
     tower.beamTicks = std::max(0, tower.beamTicks - 1);
+
+    // Smoothly slew the barrel toward its desired facing each tick (shortest arc,
+    // capped turn rate) so turrets rotate to track targets instead of snapping.
+    constexpr float kTwoPi = 6.28318530718f;
+    constexpr float kPi = 3.14159265359f;
+    constexpr float kMaxTurnPerTick = 0.22f;  // ~13 deg/tick
+    float diff = tower.targetAngle - tower.angle;
+    while (diff > kPi) {
+        diff -= kTwoPi;
+    }
+    while (diff < -kPi) {
+        diff += kTwoPi;
+    }
+    if (diff > kMaxTurnPerTick) {
+        diff = kMaxTurnPerTick;
+    } else if (diff < -kMaxTurnPerTick) {
+        diff = -kMaxTurnPerTick;
+    }
+    tower.angle += diff;
 }
 
 int findLeadingEnemyIndexInRange(
@@ -160,7 +179,7 @@ void prepareTowerFireState(
 ) {
     const float centerX = boardLeft + (static_cast<float>(tower.col) + 0.5f) * tileSize;
     const float centerY = boardTop + (static_cast<float>(tower.row) + 0.5f) * tileSize;
-    tower.angle = std::atan2(target.y - centerY, target.x - centerX);
+    tower.targetAngle = std::atan2(target.y - centerY, target.x - centerX);
     tower.beamTargetX = target.x;
     tower.beamTargetY = target.y;
     tower.flash = 1.0f;

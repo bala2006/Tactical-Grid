@@ -60,6 +60,8 @@ extension _Simulation on GameController {
     _runStats = const RunStats();
     _paused = true;
     _defeat = false;
+    _victory = false;
+    _stars = 0;
     _waitingForWave = false;
     _pendingPathfind = false;
     _spawnCooldown = 0;
@@ -101,7 +103,7 @@ extension _Simulation on GameController {
   }
 
   void _tick() {
-    if (_paused || _defeat || _activeMap == null) {
+    if (_paused || _defeat || _victory || _activeMap == null) {
       _decayVisualEffects();
       _tickSoundCooldowns();
       return;
@@ -192,9 +194,11 @@ extension _Simulation on GameController {
     if (_health <= 0 && !_defeat) {
       _defeat = true;
       _paused = true;
+      _recordDefeatOnce(kills: _runStats.kills, wave: _wave);
     }
 
     if (!_defeat &&
+        !_victory &&
         ((_waitingForWave && _waveCooldown == 0) ||
             (_config.autoSend && _queuedEnemies.isEmpty))) {
       _waitingForWave = false;
@@ -202,9 +206,25 @@ extension _Simulation on GameController {
       _nextWave();
     }
 
-    if (!_defeat && _noMoreEnemies() && !_waitingForWave) {
-      _waveCooldown = _waveCooldownMax;
-      _waitingForWave = true;
+    if (!_defeat && !_victory && _noMoreEnemies() && !_waitingForWave) {
+      // Finite campaign level: clearing the last wave wins the level.
+      if (_totalWaves > 0 && _wave >= _totalWaves) {
+        _victory = true;
+        _stars = _maxHealth <= 0
+            ? 1
+            : (_health >= _maxHealth ? 3 : (_health * 2 >= _maxHealth ? 2 : 1));
+        _paused = true;
+        _recordVictoryOnce(
+          health: _health,
+          maxHealth: _maxHealth,
+          kills: _runStats.kills,
+          wave: _wave,
+          towersBuilt: _runStats.built,
+        );
+      } else {
+        _waveCooldown = _waveCooldownMax;
+        _waitingForWave = true;
+      }
     }
 
     if (_pendingPathfind) {
@@ -1501,8 +1521,9 @@ extension _Simulation on GameController {
         _enemyTauntBuffer.add(enemy);
       }
     }
-    final List<EnemyEntity> candidates =
-        _enemyTauntBuffer.isNotEmpty ? _enemyTauntBuffer : _enemyQueryBuffer;
+    final List<EnemyEntity> candidates = _enemyTauntBuffer.isNotEmpty
+        ? _enemyTauntBuffer
+        : _enemyQueryBuffer;
     final EnemyEntity target =
         tower.blueprint.targetingMode == TargetingMode.strongest
         ? _strongestEnemy(candidates)

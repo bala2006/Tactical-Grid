@@ -5,6 +5,9 @@ struct GameConfigState {
     int difficulty = 1;
     int waveMode = 0;
     int quality = 0;
+    // Number of waves to survive for a campaign level. 0 means endless (no win
+    // condition) — the classic sandbox behaviour.
+    int totalWaves = 0;
     bool effects = true;
     bool healthBars = true;
     bool muted = false;

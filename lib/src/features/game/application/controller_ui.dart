@@ -205,6 +205,9 @@ extension _Ui on GameController {
       healthBarsEnabled: _shouldRenderHealthBars,
       defeat: _defeat,
       performance: _performance,
+      victory: _victory,
+      stars: _stars,
+      totalWaves: _totalWaves,
     );
   }
 
@@ -337,6 +340,9 @@ extension _Ui on GameController {
       state.effectsEnabled,
       state.healthBarsEnabled,
       state.defeat,
+      state.victory,
+      state.stars,
+      state.totalWaves,
       if (showPerf) state.performance.fps.toStringAsFixed(0),
       if (showPerf) state.performance.frameTimeMs.toStringAsFixed(1),
       if (showPerf) state.performance.quality.name,

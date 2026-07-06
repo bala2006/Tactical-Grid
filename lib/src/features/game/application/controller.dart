@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:async' as async show Timer;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -8,10 +9,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../domain/content.dart';
+import '../infrastructure/audio/sfx_bank.dart';
 import '../infrastructure/maps.dart';
 import '../domain/models.dart';
 import '../infrastructure/native_game_bridge.dart';
 import '../infrastructure/simulation_worker.dart';
+import '../../progression/application/progression_controller.dart';
+import '../../progression/domain/campaign.dart';
+import '../../progression/domain/shop.dart';
 
 part 'controller_render.dart';
 part 'controller_simulation.dart';
@@ -51,6 +56,12 @@ class GameController extends ChangeNotifier {
       configListenable = ValueNotifier<GameConfig>(const GameConfig());
 
   static const double _fixedStep = 1 / 60;
+  // Native SFX use a single Android SoundPool (the `soundpool` plugin) via
+  // [SfxBank]: clips are decoded once, playback is one fire-and-forget call with
+  // near-zero latency, and — unlike the old audioplayers path — it performs no
+  // per-play audio-focus management, so it never thrashes onAudioFocusChange or
+  // freezes the UI.
+  static const bool _nativeAudioEnabled = true;
   static const int _tempSpawnCount = 40;
   static const double _resistance = 0.5;
   static const double _weakness = 0.5;
@@ -69,6 +80,7 @@ class GameController extends ChangeNotifier {
 
   final math.Random _random = math.Random();
   final SimulationWorker _worker = SimulationWorker();
+  final ProgressionController progression = ProgressionController();
   final List<EnemyEntity> _enemies = <EnemyEntity>[];
   final List<TowerEntity> _towers = <TowerEntity>[];
   final List<TowerEntity> _pendingTowers = <TowerEntity>[];
@@ -87,9 +99,9 @@ class GameController extends ChangeNotifier {
   final Paint _strokePaint = Paint()..style = PaintingStyle.stroke;
   final Paint _effectPaint = Paint();
   final Paint _gradientPaint = Paint();
-  final Map<NativeSoundId, AudioPool> _nativeAudioPools =
-      <NativeSoundId, AudioPool>{};
+  final SfxBank _sfx = SfxBank();
   StreamSubscription<NativeGameSnapshot>? _nativeSnapshotSubscription;
+  async.Timer? _nativeAudioTimer;
   NativeGameBridge? _nativeBridge;
   int _lastNativeRunId = -1;
   int _lastNativeTick = -1;
@@ -129,6 +141,14 @@ class GameController extends ChangeNotifier {
   bool _initializing = false;
   bool _paused = true;
   bool _defeat = false;
+  bool _victory = false;
+  int _stars = 0;
+  int _totalWaves = 0;
+  String? _activeLevelId;
+  int? _runStartMs;
+  bool _resultRecorded = false;
+  bool _soldThisRun = false;
+  LevelResult? _lastLevelResult;
   bool _waitingForWave = false;
   bool _pendingPathfind = false;
   int _cash = 0;
@@ -178,15 +198,8 @@ class GameController extends ChangeNotifier {
   List<TowerBlueprint> get storeBlueprints => TowerKind.values
       .map((TowerKind kind) => towerBlueprints[kind]!)
       .where((TowerBlueprint blueprint) {
-        return const <TowerKind>{
-          TowerKind.gun,
-          TowerKind.laser,
-          TowerKind.slow,
-          TowerKind.sniper,
-          TowerKind.rocket,
-          TowerKind.bomb,
-          TowerKind.tesla,
-        }.contains(blueprint.kind);
+        return Shop.storefrontTowers.contains(blueprint.kind) &&
+            progression.isTowerUnlocked(blueprint.kind);
       })
       .toList(growable: false);
   bool get isNativeBoardEnabled => supportsNativeGameBoard;
@@ -198,16 +211,22 @@ class GameController extends ChangeNotifier {
     _initializing = true;
     _publishShellState(force: true);
     try {
+      await progression.load();
       if (isNativeBoardEnabled) {
-        FlameAudio.audioCache.prefix = '';
         _nativeBridge = NativeGameBridge();
         await _initializeNativeAudio();
         _nativeSnapshotSubscription = _nativeBridge!.snapshots().listen((
           NativeGameSnapshot snapshot,
         ) {
           _handleNativeSnapshot(snapshot);
-          _drainNativeAudioEvents();
         });
+        // Audio is drained on its own steady 16 ms timer, independent of the
+        // (change-gated) snapshot stream. When audio is disabled the drain is a
+        // cheap no-op (see _nativeAudioEnabled).
+        _nativeAudioTimer = async.Timer.periodic(
+          const Duration(milliseconds: 16),
+          (_) => _drainNativeAudioEvents(),
+        );
         await _nativeBridge!.initialize();
         _initialized = true;
         _loadError = null;
@@ -283,10 +302,99 @@ class GameController extends ChangeNotifier {
   }
 
   Future<void> restartGame() {
+    _resultRecorded = false;
+    _soldThisRun = false;
+    _runStartMs = DateTime.now().millisecondsSinceEpoch;
     if (isNativeBoardEnabled) {
       return _nativeBridge?.restart() ?? Future<void>.value();
     }
     return _resetGame();
+  }
+
+  /// Starts a finite campaign level: configures map, difficulty, preset waves
+  /// and the win condition, then begins the run.
+  Future<void> startCampaignLevel(CampaignLevel level) async {
+    _activeLevelId = level.id;
+    _totalWaves = level.totalWaves;
+    _resultRecorded = false;
+    _soldThisRun = false;
+    _runStartMs = DateTime.now().millisecondsSinceEpoch;
+    _config = _config.copyWith(
+      mapSelection: level.mapId,
+      difficulty: level.difficulty,
+      waveMode: WaveMode.preset,
+    );
+    _publishConfig();
+    if (isNativeBoardEnabled) {
+      await (_nativeBridge?.setLevel(
+            mapId: level.mapId,
+            difficulty: level.difficulty,
+            totalWaves: level.totalWaves,
+            waveMode: WaveMode.preset,
+          ) ??
+          Future<void>.value());
+      return;
+    }
+    await _resetGame();
+  }
+
+  String? get activeLevelId => _activeLevelId;
+
+  /// Starts an Endless (sandbox) run on the currently selected map with no win
+  /// condition. `setMap` resets the native engine's `totalWaves` to 0, so this
+  /// can never inherit a stale campaign finish line.
+  Future<void> startEndlessRun() async {
+    _activeLevelId = null;
+    _totalWaves = 0;
+    _resultRecorded = false;
+    _soldThisRun = false;
+    _runStartMs = DateTime.now().millisecondsSinceEpoch;
+    if (isNativeBoardEnabled) {
+      await (_nativeBridge?.setMap(_config.mapSelection) ??
+          Future<void>.value());
+      return;
+    }
+    await _resetGame();
+  }
+
+  /// The most recent campaign victory result, for the victory overlay.
+  LevelResult? get lastLevelResult => _lastLevelResult;
+
+  /// Records a campaign victory exactly once per run.
+  void _recordVictoryOnce({
+    required int health,
+    required int maxHealth,
+    required int kills,
+    required int wave,
+    required int towersBuilt,
+  }) {
+    if (_resultRecorded || _activeLevelId == null) {
+      return;
+    }
+    _resultRecorded = true;
+    final int? clearSeconds = _runStartMs == null
+        ? null
+        : ((DateTime.now().millisecondsSinceEpoch - _runStartMs!) / 1000)
+              .round();
+    _lastLevelResult = progression.recordVictory(
+      levelId: _activeLevelId!,
+      health: health,
+      maxHealth: maxHealth,
+      kills: kills,
+      waveReached: wave,
+      towersBuilt: towersBuilt,
+      soldAny: _soldThisRun,
+      clearSeconds: clearSeconds,
+    );
+  }
+
+  /// Records a defeat/endless run's lifetime stats exactly once per run.
+  void _recordDefeatOnce({required int kills, required int wave}) {
+    if (_resultRecorded) {
+      return;
+    }
+    _resultRecorded = true;
+    progression.recordRunStats(waveReached: wave, kills: kills);
   }
 
   void togglePause() {
@@ -415,6 +523,7 @@ class GameController extends ChangeNotifier {
   }
 
   void sellSelectedTower() {
+    _soldThisRun = true;
     if (isNativeBoardEnabled) {
       unawaited(_nativeBridge?.sellTower() ?? Future<void>.value());
       return;
@@ -462,6 +571,10 @@ class GameController extends ChangeNotifier {
     if (_config.mapSelection == value) {
       return;
     }
+    // Selecting a map in the endless picker leaves campaign mode: no win
+    // condition, no level recording.
+    _activeLevelId = null;
+    _totalWaves = 0;
     _config = _config.copyWith(mapSelection: value);
     _publishConfig();
     if (isNativeBoardEnabled) {
@@ -581,53 +694,6 @@ class GameController extends ChangeNotifier {
     _commitUiState(force: true);
   }
 
-  void toggleShowFps() {
-    _config = _config.copyWith(
-      devFlags: _config.devFlags.copyWith(showFps: !_config.devFlags.showFps),
-    );
-    _publishConfig();
-    if (isNativeBoardEnabled) {
-      unawaited(
-        _nativeBridge?.setToggle('setShowFps', _config.devFlags.showFps) ??
-            Future<void>.value(),
-      );
-    }
-    _commitUiState(force: true);
-  }
-
-  void toggleGodMode() {
-    _config = _config.copyWith(
-      devFlags: _config.devFlags.copyWith(godMode: !_config.devFlags.godMode),
-    );
-    _publishConfig();
-    if (isNativeBoardEnabled) {
-      unawaited(
-        _nativeBridge?.setToggle('setGodMode', _config.devFlags.godMode) ??
-            Future<void>.value(),
-      );
-    }
-    _commitUiState(force: true);
-  }
-
-  void toggleFiringDisabled() {
-    _config = _config.copyWith(
-      devFlags: _config.devFlags.copyWith(
-        firingDisabled: !_config.devFlags.firingDisabled,
-      ),
-    );
-    _publishConfig();
-    if (isNativeBoardEnabled) {
-      unawaited(
-        _nativeBridge?.setToggle(
-              'setFiringDisabled',
-              _config.devFlags.firingDisabled,
-            ) ??
-            Future<void>.value(),
-      );
-    }
-    _commitUiState(force: true);
-  }
-
   Future<bool> importMapString(String value) async {
     if (isNativeBoardEnabled) {
       return await (_nativeBridge?.importMapString(value) ??
@@ -742,10 +808,14 @@ class GameController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     unawaited(_nativeSnapshotSubscription?.cancel() ?? Future<void>.value());
+    _nativeAudioTimer?.cancel();
+    _nativeAudioTimer = null;
     unawaited(_nativeBridge?.dispose() ?? Future<void>.value());
+    unawaited(_sfx.dispose());
     shellStateListenable.dispose();
     uiStateListenable.dispose();
     configListenable.dispose();
+    progression.dispose();
     _staticBoardPicture?.dispose();
     _enemySquarePicture?.dispose();
     _enemyArrowPicture?.dispose();
@@ -771,6 +841,23 @@ class GameController extends ChangeNotifier {
     _activeScreen = snapshot.activeScreen;
     _paused = snapshot.hud.paused;
     _defeat = snapshot.defeatVisible;
+    _victory = snapshot.victoryVisible;
+    _stars = snapshot.stars;
+    _totalWaves = snapshot.totalWaves;
+    if (_victory) {
+      _recordVictoryOnce(
+        health: snapshot.hud.health,
+        maxHealth: snapshot.hud.maxHealth,
+        kills: snapshot.runStats.kills,
+        wave: snapshot.hud.wave,
+        towersBuilt: snapshot.runStats.built,
+      );
+    } else if (_defeat) {
+      _recordDefeatOnce(
+        kills: snapshot.runStats.kills,
+        wave: snapshot.hud.wave,
+      );
+    }
     _performance = PerformanceStats(
       fps: snapshot.performance.fps,
       frameTimeMs: snapshot.performance.frameTimeMs,
@@ -875,6 +962,9 @@ class GameController extends ChangeNotifier {
       healthBarsEnabled: snapshot.config.healthBars,
       defeat: snapshot.defeatVisible,
       performance: _performance,
+      victory: snapshot.victoryVisible,
+      stars: snapshot.stars,
+      totalWaves: snapshot.totalWaves,
     );
     _initialized = true;
     _loadError = null;
@@ -899,50 +989,51 @@ class GameController extends ChangeNotifier {
   }
 
   Future<void> _initializeNativeAudio() async {
+    if (!_nativeAudioEnabled) {
+      return;
+    }
     try {
-      _nativeAudioPools[NativeSoundId.boom] = await FlameAudio.createPool(
-        soundAsset('boom.wav'),
-        maxPlayers: 4,
-      );
-      _nativeAudioPools[NativeSoundId.missile] = await FlameAudio.createPool(
-        soundAsset('missile.wav'),
-        maxPlayers: 4,
-      );
-      _nativeAudioPools[NativeSoundId.pop] = await FlameAudio.createPool(
-        soundAsset('pop.wav'),
-        maxPlayers: 6,
-      );
-      _nativeAudioPools[NativeSoundId.railgun] = await FlameAudio.createPool(
-        soundAsset('railgun.wav'),
-        maxPlayers: 3,
-      );
-      _nativeAudioPools[NativeSoundId.sniper] = await FlameAudio.createPool(
-        soundAsset('sniper.wav'),
-        maxPlayers: 3,
-      );
-      _nativeAudioPools[NativeSoundId.spark] = await FlameAudio.createPool(
-        soundAsset('spark.wav'),
-        maxPlayers: 5,
-      );
-      _nativeAudioPools[NativeSoundId.taunt] = await FlameAudio.createPool(
-        soundAsset('taunt.wav'),
-        maxPlayers: 3,
-      );
-    } catch (_) {}
+      await _sfx.init();
+      // Decode every clip once, keyed by sound id name; voice counts give the
+      // busier effects more overlap headroom.
+      await Future.wait(<Future<void>>[
+        _sfx.load(NativeSoundId.boom.name, soundAsset('boom.wav'), voices: 3),
+        _sfx.load(NativeSoundId.missile.name, soundAsset('missile.wav'), voices: 3),
+        _sfx.load(NativeSoundId.pop.name, soundAsset('pop.wav'), voices: 4),
+        _sfx.load(NativeSoundId.railgun.name, soundAsset('railgun.wav'), voices: 2),
+        _sfx.load(NativeSoundId.sniper.name, soundAsset('sniper.wav'), voices: 2),
+        _sfx.load(NativeSoundId.spark.name, soundAsset('spark.wav'), voices: 3),
+        _sfx.load(NativeSoundId.taunt.name, soundAsset('taunt.wav'), voices: 2),
+      ]);
+    } catch (_) {
+      // Non-fatal: audio simply stays silent.
+    }
   }
 
   void _drainNativeAudioEvents() {
     final NativeGameBridge? bridge = _nativeBridge;
-    if (bridge == null || _config.muted) {
+    if (!_nativeAudioEnabled || bridge == null || _config.muted) {
       bridge?.consumeAudioEvents();
       return;
     }
-    for (final event in bridge.consumeAudioEvents()) {
-      final AudioPool? pool = _nativeAudioPools[event.soundId];
-      if (pool == null) {
-        continue;
-      }
-      unawaited(pool.start(volume: event.volume.clamp(0, 1).toDouble()));
+    final List<NativeAudioEvent> events = bridge.consumeAudioEvents();
+    if (events.isEmpty) {
+      return;
     }
+    // Coalesce: a single drain can contain many identical events (e.g. several
+    // towers firing or a cluster of kills). Playing each one would flood the
+    // audio thread and stack identical SFX. Instead play each distinct sound at
+    // most once per drain, at the loudest requested volume.
+    final Map<NativeSoundId, double> loudest = <NativeSoundId, double>{};
+    for (final NativeAudioEvent event in events) {
+      final double volume = event.volume.clamp(0.0, 1.0).toDouble();
+      final double? existing = loudest[event.soundId];
+      if (existing == null || volume > existing) {
+        loudest[event.soundId] = volume;
+      }
+    }
+    loudest.forEach((NativeSoundId soundId, double volume) {
+      _sfx.play(soundId.name, volume: volume);
+    });
   }
 }

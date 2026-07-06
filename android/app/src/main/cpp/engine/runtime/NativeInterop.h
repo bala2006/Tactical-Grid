@@ -128,6 +128,10 @@ struct NativeGameSnapshot {
     NativeSelectionSnapshot selection;
     NativePendingPlacementSnapshot pendingPlacement;
     char exportMap[kMapIdCapacity] = {};
+    // Remaster (appended to preserve existing byte offsets):
+    std::uint8_t victoryVisible = 0;  // finite level cleared
+    std::int32_t stars = 0;           // 1-3 stars earned at victory
+    std::int32_t totalWaves = 0;      // 0 = endless, >0 = finite campaign level
 };
 
 #pragma pack(pop)

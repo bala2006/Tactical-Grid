@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <array>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -76,6 +77,10 @@ private:
     void updateSimulation(double dtSeconds);
     void updateBoardMetrics();
     void renderBoard(float pulse);
+    void validateContentOnce();
+    bool invokeActionLocked(const std::string &actionId, const std::string &payload);
+    void buildSnapshotLocked();
+    void publishSnapshotLocked();
     unsigned int packColor(int r, int g, int b, int a = 255) const;
     void loadMapById(const std::string &mapId);
     void restartRunLocked();
@@ -162,11 +167,14 @@ private:
     std::vector<int> towerChainScratch_;
     int health_ = 40;
     int maxHealth_ = 40;
-    int cash_ = 55;
+    int cash_ = 60;
     int kills_ = 0;
     int builtCount_ = 0;
     int leakCount_ = 0;
     float totalDamage_ = 0.0f;
+    bool victory_ = false;       // set when a finite (campaign) level is cleared
+    int starsEarned_ = 0;        // 1-3 stars computed at victory
+    bool victoryPaused_ = false; // freezes the sim while the victory overlay shows
     bool buildMode_ = false;
     GameConfigState config_;
     towerdefense::WaveRuntimeState waveRuntime_;
@@ -193,6 +201,14 @@ private:
     int waveCooldownTicksRemaining_ = 0;
     bool waitingForNextWave_ = false;
     towerdefense::NativeGameSnapshot snapshot_{};
+    // Lock-free snapshot publishing: the sim/render thread builds into a rotating
+    // buffer and atomically publishes a pointer; FFI readers (Dart) load it without
+    // taking the engine mutex, removing reader/writer contention and per-read rebuilds.
+    static constexpr int kSnapshotBuffers = 3;
+    std::array<towerdefense::NativeGameSnapshot, kSnapshotBuffers> snapshotBuffers_{};
+    std::atomic<const towerdefense::NativeGameSnapshot *> publishedSnapshot_{nullptr};
+    int snapshotWriteIndex_ = 0;
+    int lastPublishedTick_ = -1;
     static constexpr size_t kAudioQueueCapacity = 64;
     std::array<towerdefense::NativeAudioEvent, kAudioQueueCapacity> audioQueue_{};
     size_t audioQueueReadIndex_ = 0;

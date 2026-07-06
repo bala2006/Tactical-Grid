@@ -4,13 +4,15 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../game/application/controller.dart';
 import '../../game/domain/models.dart';
-import '../../game/rendering/tower_defense_flame_game.dart';
 import '../presentation/game_theme.dart';
 import '../presentation/screens/game_screen.dart';
 import '../presentation/screens/home_screen.dart';
 import '../presentation/screens/leaderboard_screen.dart';
 import '../presentation/screens/map_selector_screen.dart';
 import '../presentation/screens/settings_screen.dart';
+import '../presentation/screens/shop_screen.dart';
+import '../presentation/screens/world_map_screen.dart';
+import '../../progression/domain/campaign.dart';
 
 class GameShell extends StatefulWidget {
   const GameShell({required this.controller, super.key});
@@ -22,14 +24,6 @@ class GameShell extends StatefulWidget {
 }
 
 class _GameShellState extends State<GameShell> {
-  late final TowerDefenseFlameGame _game;
-
-  @override
-  void initState() {
-    super.initState();
-    _game = TowerDefenseFlameGame(controller: widget.controller);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -39,28 +33,46 @@ class _GameShellState extends State<GameShell> {
           valueListenable: widget.controller.shellStateListenable,
           builder: (BuildContext context, ShellState shellState, _) {
             if (shellState.isInitializing) {
-              return const Center(child: CircularProgressIndicator());
+              return const _BootScreen();
             }
             if (shellState.loadError != null) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    shellState.loadError!,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                    textAlign: TextAlign.center,
+              return DecoratedBox(
+                decoration: const BoxDecoration(gradient: GameGradients.screen),
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        const Icon(
+                          Icons.error_outline_rounded,
+                          color: GameColors.danger,
+                          size: 36,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          shellState.loadError!,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               );
             }
 
+            final Widget screen;
             switch (shellState.activeScreen) {
               case 'leaderboard':
-                return LeaderboardScreen(
+                screen = LeaderboardScreen(
                   onBack: () => widget.controller.setActiveScreen('home'),
+                  profileListenable:
+                      widget.controller.progression.profileListenable,
                 );
+                break;
               case 'settings':
-                return ValueListenableBuilder<GameConfig>(
+                screen = ValueListenableBuilder<GameConfig>(
                   valueListenable: widget.controller.configListenable,
                   builder: (BuildContext context, GameConfig _, __) {
                     return SettingsScreen(
@@ -72,8 +84,28 @@ class _GameShellState extends State<GameShell> {
                     );
                   },
                 );
+                break;
+              case 'shop':
+                screen = ShopScreen(
+                  progression: widget.controller.progression,
+                  onBack: () => widget.controller.setActiveScreen('world'),
+                );
+                break;
+              case 'world':
+                screen = WorldMapScreen(
+                  profileListenable:
+                      widget.controller.progression.profileListenable,
+                  onBack: () => widget.controller.setActiveScreen('home'),
+                  onEndless: () => widget.controller.setActiveScreen('map'),
+                  onShop: () => widget.controller.setActiveScreen('shop'),
+                  onSelectLevel: (CampaignLevel level) async {
+                    await widget.controller.startCampaignLevel(level);
+                    widget.controller.setActiveScreen('game');
+                  },
+                );
+                break;
               case 'map':
-                return ValueListenableBuilder<GameConfig>(
+                screen = ValueListenableBuilder<GameConfig>(
                   valueListenable: widget.controller.configListenable,
                   builder: (BuildContext context, GameConfig config, __) {
                     return MapSelectorScreen(
@@ -81,29 +113,63 @@ class _GameShellState extends State<GameShell> {
                       onBack: () => widget.controller.setActiveScreen('home'),
                       onSelectMap: widget.controller.updateMapSelection,
                       onStartRun: () async {
-                        await widget.controller.restartGame();
+                        await widget.controller.startEndlessRun();
                         widget.controller.setActiveScreen('game');
                       },
                     );
                   },
                 );
+                break;
               case 'game':
-                return GameScreen(
+                screen = GameScreen(
                   controller: widget.controller,
-                  game: _game,
-                  onBackToMap: () => widget.controller.setActiveScreen('map'),
+                  onBackToMap: () => widget.controller.setActiveScreen(
+                    widget.controller.activeLevelId != null ? 'world' : 'map',
+                  ),
+                  onWorldMap: () => widget.controller.setActiveScreen('world'),
                   onShowIntel: () => _showIntelSheet(context),
-                  onShowDevPanel: () => _showDevPanel(context),
                 );
+                break;
               default:
-                return HomeScreen(
-                  onPlay: () => widget.controller.setActiveScreen('map'),
+                screen = HomeScreen(
+                  onPlay: () => widget.controller.setActiveScreen('world'),
                   onLeaderboard: () =>
                       widget.controller.setActiveScreen('leaderboard'),
                   onSettings: () =>
                       widget.controller.setActiveScreen('settings'),
                 );
             }
+            return AnimatedSwitcher(
+              duration: const Duration(milliseconds: 320),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder: (Widget child, Animation<double> anim) {
+                return FadeTransition(
+                  opacity: anim,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.025),
+                      end: Offset.zero,
+                    ).animate(anim),
+                    child: child,
+                  ),
+                );
+              },
+              layoutBuilder:
+                  (Widget? currentChild, List<Widget> previousChildren) {
+                    return Stack(
+                      alignment: Alignment.topCenter,
+                      children: <Widget>[
+                        ...previousChildren,
+                        if (currentChild != null) currentChild,
+                      ],
+                    );
+                  },
+              child: KeyedSubtree(
+                key: ValueKey<String>(shellState.activeScreen),
+                child: screen,
+              ),
+            );
           },
         ),
       ),
@@ -114,7 +180,7 @@ class _GameShellState extends State<GameShell> {
     final info = widget.controller.uiState.selectionInfo;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: GameColors.panel,
+      backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (BuildContext context) {
         return SafeArea(
@@ -122,121 +188,99 @@ class _GameShellState extends State<GameShell> {
             padding: const EdgeInsets.all(16),
             child: _DialogCard(
               child: info == null
-                  ? const Text(
-                      'No tower selected. Tap a placed tower or choose one from the dock.',
+                  ? Row(
+                      children: const <Widget>[
+                        Icon(
+                          Icons.touch_app_rounded,
+                          color: GameColors.muted,
+                          size: 20,
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'No turret selected. Tap a placed turret or choose '
+                            'one from the arsenal.',
+                            style: TextStyle(color: GameColors.muted),
+                          ),
+                        ),
+                      ],
                     )
                   : Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Text(
-                          info.title,
-                          style: TextStyle(
-                            color: info.titleColor,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                          ),
+                        Row(
+                          children: <Widget>[
+                            Container(
+                              width: 10,
+                              height: 26,
+                              decoration: BoxDecoration(
+                                color: info.titleColor,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                info.title,
+                                style: TextStyle(
+                                  color: info.titleColor,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            _IntelTag(
+                              label: info.damageTypeLabel,
+                              color: info.titleColor,
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 10),
-                        Text('Cost: \$${info.cost.toStringAsFixed(0)}'),
-                        Text('Sell: \$${info.sellPrice.toStringAsFixed(0)}'),
-                        Text(
-                          'Upgrade: ${info.upgradePrice == null ? 'N/A' : '\$${info.upgradePrice!.toStringAsFixed(0)}'}',
+                        const SizedBox(height: 14),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: <Widget>[
+                            _IntelStat(
+                              label: 'DAMAGE',
+                              value: info.damage,
+                            ),
+                            _IntelStat(
+                              label: 'DPS',
+                              value: info.dps.toStringAsFixed(1),
+                            ),
+                            _IntelStat(
+                              label: 'RANGE',
+                              value: info.range.toStringAsFixed(1),
+                            ),
+                            _IntelStat(
+                              label: 'COOLDOWN',
+                              value: '${info.cooldownSeconds.toStringAsFixed(2)}s',
+                            ),
+                            _IntelStat(
+                              label: 'COST',
+                              value: '\$${info.cost.toStringAsFixed(0)}',
+                            ),
+                            _IntelStat(
+                              label: 'SELL',
+                              value: '\$${info.sellPrice.toStringAsFixed(0)}',
+                            ),
+                          ],
                         ),
-                        Text('Damage: ${info.damage}'),
-                        Text('DPS: ${info.dps.toStringAsFixed(2)}'),
-                        Text('Type: ${info.damageTypeLabel}'),
-                        Text('Range: ${info.range}'),
-                        Text(
-                          'Cooldown: ${info.cooldownSeconds.toStringAsFixed(2)}s',
+                        const SizedBox(height: 12),
+                        _IntelLine(
+                          icon: Icons.gps_fixed_rounded,
+                          label: 'Targeting',
+                          value: info.targeting,
                         ),
-                        const SizedBox(height: 10),
-                        Text('Targeting: ${info.targeting}'),
-                        Text('Effect: ${info.effect}'),
+                        _IntelLine(
+                          icon: Icons.auto_awesome_rounded,
+                          label: 'Effect',
+                          value: info.effect,
+                        ),
                       ],
                     ),
             ),
           ),
-        );
-      },
-    );
-  }
-
-  Future<void> _showDevPanel(BuildContext context) async {
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setState) {
-            final config = widget.controller.config;
-            return Dialog(
-              backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.symmetric(
-                horizontal: 36,
-                vertical: 80,
-              ),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
-                child: _DialogCard(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            const Expanded(
-                              child: Text(
-                                'Developer Controls',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              icon: const Icon(Icons.close_rounded, size: 14),
-                              splashRadius: 16,
-                              constraints: const BoxConstraints.tightFor(
-                                width: 24,
-                                height: 24,
-                              ),
-                              padding: EdgeInsets.zero,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        _DevToggleRow(
-                          label: 'Show FPS',
-                          value: config.devFlags.showFps,
-                          onChanged: (_) {
-                            widget.controller.toggleShowFps();
-                            setState(() {});
-                          },
-                        ),
-                        _DevToggleRow(
-                          label: 'God Mode',
-                          value: config.devFlags.godMode,
-                          onChanged: (_) {
-                            widget.controller.toggleGodMode();
-                            setState(() {});
-                          },
-                        ),
-                        _DevToggleRow(
-                          label: 'Disable Tower Fire',
-                          value: config.devFlags.firingDisabled,
-                          onChanged: (_) {
-                            widget.controller.toggleFiringDisabled();
-                            setState(() {});
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
         );
       },
     );
@@ -301,53 +345,191 @@ class _DialogCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[Color(0xF0122A45), Color(0xFF0E2137)],
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0x2E7A9CD2)),
+        gradient: GameGradients.panel,
+        borderRadius: BorderRadius.circular(GameSpace.radiusLg),
+        border: Border.all(color: GameColors.borderStrong),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x80000000),
+            blurRadius: 26,
+            offset: Offset(0, 16),
+          ),
+        ],
       ),
-      child: Padding(padding: const EdgeInsets.all(14), child: child),
+      child: Padding(padding: const EdgeInsets.all(16), child: child),
     );
   }
 }
 
-class _DevToggleRow extends StatelessWidget {
-  const _DevToggleRow({
+class _IntelTag extends StatelessWidget {
+  const _IntelTag({required this.label, required this.color});
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          color: color,
+          fontSize: 9,
+          letterSpacing: 1.0,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _IntelStat extends StatelessWidget {
+  const _IntelStat({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 96,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: GameColors.panelStrong,
+        borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+        border: Border.all(color: GameColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            value,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900),
+          ),
+          Text(
+            label,
+            style: const TextStyle(
+              color: GameColors.muted,
+              fontSize: 8,
+              letterSpacing: 1.0,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _IntelLine extends StatelessWidget {
+  const _IntelLine({
+    required this.icon,
     required this.label,
     required this.value,
-    required this.onChanged,
   });
-
+  final IconData icon;
   final String label;
-  final bool value;
-  final ValueChanged<bool> onChanged;
+  final String value;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1.5),
+      padding: const EdgeInsets.only(top: 6),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
+          Icon(icon, size: 14, color: GameColors.accentBright),
+          const SizedBox(width: 8),
+          Text(
+            '$label: ',
+            style: const TextStyle(
+              color: GameColors.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          Transform.scale(
-            scale: 0.82,
-            child: Switch(
-              value: value,
-              onChanged: onChanged,
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: GameColors.text, fontSize: 11),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Branded boot screen shown while the controller initialises.
+class _BootScreen extends StatelessWidget {
+  const _BootScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(gradient: GameGradients.screen),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: 70,
+              height: 70,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const RadialGradient(
+                  colors: <Color>[Color(0xFF173352), Color(0xFF0C1B2E)],
+                ),
+                border: Border.all(color: GameColors.accent, width: 2),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: GameColors.accent.withValues(alpha: 0.4),
+                    blurRadius: 24,
+                    spreadRadius: -4,
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.shield_rounded,
+                color: GameColors.accentBright,
+                size: 34,
+              ),
+            ),
+            const SizedBox(height: 22),
+            const Text(
+              'FORWARD DEFENSE GRID',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 14,
+                letterSpacing: 1.5,
+              ),
+            ),
+            const SizedBox(height: 14),
+            const SizedBox(
+              width: 120,
+              child: LinearProgressIndicator(
+                minHeight: 3,
+                backgroundColor: GameColors.panelStrong,
+                valueColor: AlwaysStoppedAnimation<Color>(GameColors.accent),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'INITIALISING SYSTEMS',
+              style: TextStyle(
+                color: GameColors.muted,
+                fontSize: 9,
+                letterSpacing: 2.0,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

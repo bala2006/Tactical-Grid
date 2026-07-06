@@ -22,7 +22,6 @@ add_library(towerdefense SHARED
         engine/content/TowerCatalog.cpp
         engine/content/TowerUpgrades.cpp
         engine/systems/WaveRuntime.cpp
-        engine/content/WaveSpec.cpp
         engine/rendering/GlRenderer2D.cpp)
 
 target_include_directories(towerdefense PRIVATE

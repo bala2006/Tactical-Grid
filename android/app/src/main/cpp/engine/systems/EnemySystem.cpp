@@ -36,6 +36,13 @@ EnemyRuntime makeEnemyInstance(
     enemy.maxHealth = blueprint.health;
     enemy.cash = blueprint.cash;
     enemy.damage = blueprint.damage;
+    // Seed the trail history at the spawn position.
+    for (int i = 0; i < EnemyRuntime::kTrailSamples; ++i) {
+        enemy.trailX[i] = enemy.x;
+        enemy.trailY[i] = enemy.y;
+    }
+    enemy.trailHead = 0;
+    enemy.trailFilled = 1;
     return enemy;
 }
 
@@ -170,6 +177,13 @@ bool advanceEnemy(
     steerEnemy(enemy, tileSize, pathAt, boardPointToTile, atTileCenter);
     enemy.x += enemy.vx;
     enemy.y += enemy.vy;
+    // Record this tick's position for multi-segment body rendering.
+    enemy.trailHead = (enemy.trailHead + 1) % EnemyRuntime::kTrailSamples;
+    enemy.trailX[enemy.trailHead] = enemy.x;
+    enemy.trailY[enemy.trailHead] = enemy.y;
+    if (enemy.trailFilled < EnemyRuntime::kTrailSamples) {
+        enemy.trailFilled++;
+    }
     enemy.hitFlash = std::max(0.0f, enemy.hitFlash - 0.08f);
 
     int col = 0;

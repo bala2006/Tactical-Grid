@@ -7,7 +7,6 @@
 #include "ProjectileSystem.h"
 #include "TowerSystem.h"
 #include "TowerUpgrades.h"
-#include "WaveSpec.h"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +17,8 @@
 #include <random>
 #include <sstream>
 #include <stdexcept>
+
+#include <android/log.h>
 
 using towerdefense::TowerCatalogEntry;
 using towerdefense::EnemyBlueprint;
@@ -35,7 +36,6 @@ using towerdefense::findTowerCatalogEntry;
 using towerdefense::findEnemyArchetype;
 using towerdefense::makeEnemyInstance;
 using towerdefense::makeTowerRuntime;
-using towerdefense::makeWaveSpec;
 using towerdefense::prepareTowerFireState;
 using towerdefense::towerCatalogEntries;
 using towerdefense::advanceWaveByTicks;
@@ -277,16 +277,37 @@ std::vector<std::string> expandWavePattern(const WavePatternDef &pattern) {
 }
 
 WavePatternDef choosePresetWave(int waveNumber, int waveMode) {
-    static const std::array<WavePatternDef, 9> kPresetWaves = {{
-        {40, {{{"weak"}, 20}}},
-        {30, {{{"weak"}, 10}, {{"fast"}, 10}}},
-        {20, {{{"strong"}, 15}, {{"fast"}, 10}}},
-        {20, {{{"medic", "strong", "strong"}, 10}}},
-        {15, {{{"strongFast"}, 20}}},
-        {15, {{{"tank"}, 8}, {{"fast"}, 16}}},
-        {10, {{{"spawner"}, 2}, {{"stronger"}, 18}}},
-        {10, {{{"taunt", "tank", "tank", "stronger"}, 10}}},
-        {5, {{{"taunt", "medic", "tank"}, 16}, {{"faster"}, 24}}},
+    // Authored campaign arc (preset mode). One new mechanic is introduced at a time so
+    // players learn counters before pressure stacks. Per-wave enemy HP scaling
+    // (see spawnEnemyAt) keeps difficulty rising smoothly between these beats, and the
+    // last entry is reused for endless play beyond the authored arc.
+    //   1-3   learn placement (weak only)
+    //   4-6   introduce fast (target priority)
+    //   7-9   introduce strong + first medic (focus fire)
+    //   10-12 introduce tank + strongFast (armor / AoE)
+    //   13-15 taunt / spawner mini-boss beats
+    //   16-20 combined pressure
+    static const std::array<WavePatternDef, 20> kPresetWaves = {{
+        {40, {{{"weak"}, 12}}},
+        {38, {{{"weak"}, 16}}},
+        {34, {{{"weak"}, 20}}},
+        {30, {{{"weak"}, 12}, {{"fast"}, 6}}},
+        {28, {{{"fast"}, 14}}},
+        {26, {{{"weak"}, 10}, {{"fast"}, 12}}},
+        {26, {{{"strong"}, 12}}},
+        {24, {{{"strong"}, 8}, {{"fast"}, 10}}},
+        {24, {{{"medic", "strong", "strong"}, 6}}},
+        {22, {{{"tank"}, 4}, {{"strong"}, 10}}},
+        {22, {{{"tank"}, 6}, {{"fast"}, 12}}},
+        {20, {{{"strongFast"}, 16}}},
+        {18, {{{"taunt"}, 2}, {{"strong"}, 14}}},
+        {18, {{{"spawner"}, 2}, {{"stronger"}, 12}}},
+        {16, {{{"taunt", "tank", "tank"}, 6}}},
+        {16, {{{"stronger"}, 16}, {{"faster"}, 8}}},
+        {14, {{{"medic", "stronger", "stronger"}, 8}}},
+        {14, {{{"tank", "stronger"}, 10}, {{"faster"}, 12}}},
+        {12, {{{"spawner"}, 2}, {{"taunt", "tank", "tank"}, 8}}},
+        {10, {{{"taunt", "medic", "tank"}, 10}, {{"faster"}, 16}}},
     }};
     static const std::array<WavePatternDef, 5> kCustomWaves = {{
         {30, {{{"weak"}, 12}, {{"strong"}, 6}}},
@@ -455,7 +476,9 @@ std::string_view damageTypeForTower(TowerKindId towerKind) {
         return "poison";
     }
     if (towerKind == TowerKindId::Rocket || towerKind == TowerKindId::MissileSilo ||
-        towerKind == TowerKindId::Bomb || towerKind == TowerKindId::ClusterBomb) {
+        towerKind == TowerKindId::Bomb || towerKind == TowerKindId::ClusterBomb ||
+        towerKind == TowerKindId::Mortar || towerKind == TowerKindId::SiegeHowitzer ||
+        towerKind == TowerKindId::Interceptor || towerKind == TowerKindId::AegisBattery) {
         return "explosion";
     }
     if (towerKind == TowerKindId::Railgun) {
@@ -475,6 +498,9 @@ bool isTowerFamily(std::string_view towerKind, std::string_view familyKind) {
     if (familyKind == "rocket") return towerKind == "missileSilo";
     if (familyKind == "bomb") return towerKind == "clusterBomb";
     if (familyKind == "tesla") return towerKind == "plasma";
+    if (familyKind == "gatling") return towerKind == "vulcanCiws";
+    if (familyKind == "mortar") return towerKind == "siegeHowitzer";
+    if (familyKind == "interceptor") return towerKind == "aegisBattery";
     return false;
 }
 
@@ -573,8 +599,88 @@ NativeEngine::~NativeEngine() {
     renderer_.shutdown();
 }
 
+void NativeEngine::validateContentOnce() {
+    static bool validated = false;
+    if (validated) {
+        return;
+    }
+    validated = true;
+
+    constexpr const char *kTag = "TacticalGridContent";
+    int issues = 0;
+
+    for (const TowerCatalogEntry &entry : towerCatalogEntries()) {
+        // Invariant 1: every damage-dealing tower must deal at least 1 effective damage.
+        if (!entry.statusOnly && entry.damageMax < 1.0f) {
+            __android_log_print(ANDROID_LOG_ERROR, kTag,
+                "Tower '%.*s' is not status-only but has damageMax %.2f (< 1).",
+                static_cast<int>(entry.kindId.size()), entry.kindId.data(),
+                static_cast<double>(entry.damageMax));
+            issues++;
+        }
+        if (entry.damageMax < entry.damageMin) {
+            __android_log_print(ANDROID_LOG_ERROR, kTag,
+                "Tower '%.*s' has damageMin %.2f > damageMax %.2f.",
+                static_cast<int>(entry.kindId.size()), entry.kindId.data(),
+                static_cast<double>(entry.damageMin), static_cast<double>(entry.damageMax));
+            issues++;
+        }
+
+        // Invariant 2: an upgrade must never regress cost or average damage.
+        if (!entry.nextUpgradeKindId.empty()) {
+            const TowerCatalogEntry *next = findTowerCatalogEntry(entry.nextUpgradeKindId);
+            if (next == nullptr) {
+                __android_log_print(ANDROID_LOG_ERROR, kTag,
+                    "Tower '%.*s' references missing upgrade '%.*s'.",
+                    static_cast<int>(entry.kindId.size()), entry.kindId.data(),
+                    static_cast<int>(entry.nextUpgradeKindId.size()), entry.nextUpgradeKindId.data());
+                issues++;
+            } else if (!entry.statusOnly) {
+                // Upgrades may trade per-shot damage for fire rate, so compare DPS,
+                // not per-shot average (Gun -> Machine Gun is a valid DPS increase).
+                const auto dps = [](const TowerCatalogEntry &e) -> float {
+                    const float avgDamage = (e.damageMin + e.damageMax) * 0.5f;
+                    const float avgCooldown =
+                        (static_cast<float>(e.cooldownMin) + static_cast<float>(e.cooldownMax)) * 0.5f;
+                    const float cooldownSeconds = avgCooldown / 60.0f;
+                    return cooldownSeconds <= 0.0f ? avgDamage * 60.0f : avgDamage / cooldownSeconds;
+                };
+                if (dps(*next) < dps(entry)) {
+                    __android_log_print(ANDROID_LOG_WARN, kTag,
+                        "Upgrade '%.*s' -> '%.*s' reduces DPS (%.1f -> %.1f).",
+                        static_cast<int>(entry.kindId.size()), entry.kindId.data(),
+                        static_cast<int>(next->kindId.size()), next->kindId.data(),
+                        static_cast<double>(dps(entry)), static_cast<double>(dps(*next)));
+                    issues++;
+                }
+            }
+        }
+    }
+
+    // Invariant 3: every wave archetype id must resolve to a real enemy archetype.
+    static const std::array<const char *, 10> kKnownArchetypes = {{
+        "weak", "strong", "fast", "medic", "strongFast",
+        "stronger", "faster", "tank", "taunt", "spawner",
+    }};
+    for (const char *id : kKnownArchetypes) {
+        if (findEnemyArchetype(std::string_view(id)) == nullptr) {
+            __android_log_print(ANDROID_LOG_ERROR, kTag,
+                "Enemy archetype '%s' is referenced but not defined.", id);
+            issues++;
+        }
+    }
+
+    if (issues == 0) {
+        __android_log_print(ANDROID_LOG_INFO, kTag, "Content validation passed.");
+    } else {
+        __android_log_print(ANDROID_LOG_ERROR, kTag,
+            "Content validation found %d issue(s). See log above.", issues);
+    }
+}
+
 void NativeEngine::onSurfaceCreated() {
     std::scoped_lock lock(mutex_);
+    validateContentOnce();
     renderer_.initialize();
     if (grid_.empty()) {
         loadMapById(mapId_);
@@ -626,12 +732,20 @@ void NativeEngine::onDrawFrame() {
     renderer_.beginFrame(surfaceWidth_, surfaceHeight_);
     renderBoard(pulse);
     renderer_.flush();
+    // Publish for lock-free FFI reads only when the simulation advanced; input-
+    // driven changes (actions/taps/screen/lifecycle) publish explicitly elsewhere,
+    // so this avoids rebuilding an identical snapshot 60x/sec while paused/idle.
+    if (tickCount_ != lastPublishedTick_) {
+        lastPublishedTick_ = tickCount_;
+        publishSnapshotLocked();
+    }
 }
 
 void NativeEngine::onPause() {
     std::scoped_lock lock(mutex_);
     lifecyclePaused_ = true;
     syncPausedState();
+    publishSnapshotLocked();
 }
 
 void NativeEngine::onResume() {
@@ -643,10 +757,11 @@ void NativeEngine::onResume() {
     simAccumulatorSeconds_ = 0.0;
     renderAlpha_ = 0.0f;
     smoothedFrameTimeMs_ = std::max(1.0f, lastFrameTimeMs_);
+    publishSnapshotLocked();
 }
 
 void NativeEngine::syncPausedState() {
-    paused_ = userPaused_ || lifecyclePaused_ || defeatPaused_ || placementPaused_;
+    paused_ = userPaused_ || lifecyclePaused_ || defeatPaused_ || placementPaused_ || victoryPaused_;
     waveRuntime_.paused = paused_;
 }
 
@@ -690,8 +805,10 @@ void NativeEngine::clearPlacementCountdown() {
 }
 
 void NativeEngine::restartRunLocked() {
-    const int baseHealth = config_.difficulty == 0 ? 55 : (config_.difficulty == 2 ? 30 : 40);
-    int baseCash = config_.difficulty == 0 ? 75 : (config_.difficulty == 2 ? 45 : 55);
+    // Starting economy per difficulty (0=Easy, 1=Normal, 2=Hard). Paired with the
+    // end-of-wave cash bonus and per-wave HP scaling to give a fair, climbing curve.
+    const int baseHealth = config_.difficulty == 0 ? 60 : (config_.difficulty == 2 ? 25 : 40);
+    int baseCash = config_.difficulty == 0 ? 80 : (config_.difficulty == 2 ? 45 : 60);
     if (isProceduralMapId(mapId_) && !mapId_.empty() && mapId_.back() == '3') {
         baseCash = 65;
     }
@@ -722,6 +839,9 @@ void NativeEngine::restartRunLocked() {
     lifecyclePaused_ = false;
     defeatPaused_ = false;
     placementPaused_ = false;
+    victory_ = false;
+    starsEarned_ = 0;
+    victoryPaused_ = false;
     syncPausedState();
     buildMode_ = false;
     placementMessage_.clear();
@@ -766,15 +886,26 @@ void NativeEngine::onPointer(float xPx, float yPx, int phase) {
             selectedRow_ = -1;
         }
     }
+    publishSnapshotLocked();
 }
 
 void NativeEngine::setActiveScreen(int screenId) {
     std::scoped_lock lock(mutex_);
     activeScreen_ = screenId;
+    // Publish so the new screen is reflected immediately; otherwise a stale
+    // published snapshot would make the Dart side bounce back to the old screen.
+    publishSnapshotLocked();
 }
 
 bool NativeEngine::invokeAction(const std::string &actionId, const std::string &payload) {
     std::scoped_lock lock(mutex_);
+    const bool result = invokeActionLocked(actionId, payload);
+    // Publish immediately so dock actions / taps are reflected without waiting a frame.
+    publishSnapshotLocked();
+    return result;
+}
+
+bool NativeEngine::invokeActionLocked(const std::string &actionId, const std::string &payload) {
     if (actionId == "togglePause") {
         if (health_ <= 0) {
             return false;
@@ -853,8 +984,43 @@ bool NativeEngine::invokeAction(const std::string &actionId, const std::string &
         }
         return false;
     } else if (actionId == "setMap") {
+        config_.totalWaves = 0;  // endless picker: clear any campaign win condition
         loadMapById(payload);
         updateBoardMetrics();
+        restartRunLocked();
+        return true;
+    } else if (actionId == "setLevel") {
+        // Campaign level loader. Payload: "mapId|difficulty|totalWaves|waveMode".
+        // Configures a finite run (totalWaves > 0 enables the victory condition)
+        // and restarts. Missing trailing fields keep their current values.
+        std::vector<std::string> parts;
+        std::string token;
+        for (char ch : payload) {
+            if (ch == '|') {
+                parts.push_back(token);
+                token.clear();
+            } else {
+                token.push_back(ch);
+            }
+        }
+        parts.push_back(token);
+        if (!parts.empty() && !parts[0].empty()) {
+            loadMapById(parts[0]);
+            updateBoardMetrics();
+        }
+        if (parts.size() > 1 && !parts[1].empty()) {
+            config_.difficulty = std::clamp(std::stoi(parts[1]), 0, 2);
+        }
+        if (parts.size() > 2 && !parts[2].empty()) {
+            config_.totalWaves = std::max(0, std::stoi(parts[2]));
+        }
+        if (parts.size() > 3 && !parts[3].empty()) {
+            config_.waveMode = std::clamp(std::stoi(parts[3]), 0, 2);
+        }
+        restartRunLocked();
+        return true;
+    } else if (actionId == "setTotalWaves") {
+        config_.totalWaves = payload.empty() ? 0 : std::max(0, std::stoi(payload));
         restartRunLocked();
         return true;
     } else if (actionId == "selectTower") {
@@ -897,8 +1063,12 @@ bool NativeEngine::invokeAction(const std::string &actionId, const std::string &
                     }
                     towers_.push_back(createTowerInstance(buildTowerKind_, col, row));
                     buildMode_ = false;
-                    selectedCol_ = col;
-                    selectedRow_ = row;
+                    // Do not auto-select the freshly placed tower: keeping it selected
+                    // hid the tower dock and forced the player to tap empty ground before
+                    // they could place another tower. Clear selection so the dock is
+                    // immediately usable again.
+                    selectedCol_ = -1;
+                    selectedRow_ = -1;
                     builtCount_++;
                     placementMessage_.clear();
                     rebuildDynamicPaths();
@@ -1000,8 +1170,7 @@ void NativeEngine::handleBoardDrag(float xPx, float yPx, int phase) {
     onPointer(xPx, yPx, phase);
 }
 
-const NativeGameSnapshot &NativeEngine::snapshot() {
-    std::scoped_lock lock(mutex_);
+void NativeEngine::buildSnapshotLocked() {
     const int builtCount = std::max(
         builtCount_,
         static_cast<int>(towers_.size())
@@ -1224,7 +1393,34 @@ const NativeGameSnapshot &NativeEngine::snapshot() {
     }
 
     copyCString(snapshot_.exportMap, mapId_);
-    return snapshot_;
+
+    snapshot_.victoryVisible = victory_ ? 1 : 0;
+    snapshot_.stars = starsEarned_;
+    snapshot_.totalWaves = config_.totalWaves;
+}
+
+void NativeEngine::publishSnapshotLocked() {
+    buildSnapshotLocked();
+    const NativeGameSnapshot *current = publishedSnapshot_.load(std::memory_order_relaxed);
+    int idx = snapshotWriteIndex_;
+    // Never write the buffer a reader may currently hold (the published one).
+    if (&snapshotBuffers_[static_cast<size_t>(idx)] == current) {
+        idx = (idx + 1) % kSnapshotBuffers;
+    }
+    snapshotBuffers_[static_cast<size_t>(idx)] = snapshot_;
+    publishedSnapshot_.store(&snapshotBuffers_[static_cast<size_t>(idx)], std::memory_order_release);
+    snapshotWriteIndex_ = (idx + 1) % kSnapshotBuffers;
+}
+
+const NativeGameSnapshot &NativeEngine::snapshot() {
+    // Lock-free read: returns the most recently published buffer without touching
+    // the engine mutex (no contention with the sim/render thread, no per-read rebuild).
+    const NativeGameSnapshot *published = publishedSnapshot_.load(std::memory_order_acquire);
+    if (published == nullptr) {
+        static const NativeGameSnapshot kEmpty{};
+        return kEmpty;
+    }
+    return *published;
 }
 
 int NativeEngine::consumeAudioEvents(NativeAudioEvent *buffer, int maxEvents) {
@@ -1281,6 +1477,17 @@ void NativeEngine::updateSimulation(double dtSeconds) {
             renderAlpha_ = 0.0f;
             return;
         }
+        // Keep a cleared finite level frozen on the victory overlay.
+        if (victory_) {
+            victoryPaused_ = true;
+            syncPausedState();
+            waitingForNextWave_ = false;
+            waveCooldownTicksRemaining_ = 0;
+            waveRuntime_.waveActive = false;
+            simAccumulatorSeconds_ = 0.0;
+            renderAlpha_ = 0.0f;
+            return;
+        }
         if (health_ > 0) {
             if (waitingForNextWave_) {
                 if (waveCooldownTicksRemaining_ > 0) {
@@ -1291,7 +1498,28 @@ void NativeEngine::updateSimulation(double dtSeconds) {
                     queueNextWave();
                 }
             } else if (pendingEnemyQueue_.empty() && enemies_.empty()) {
+                // Finite (campaign) level: clearing the last wave is a victory.
+                if (config_.totalWaves > 0 && waveRuntime_.waveNumber >= config_.totalWaves) {
+                    victory_ = true;
+                    starsEarned_ = (health_ >= maxHealth_)
+                        ? 3
+                        : (health_ * 2 >= maxHealth_ ? 2 : 1);
+                    victoryPaused_ = true;
+                    syncPausedState();
+                    waitingForNextWave_ = false;
+                    waveCooldownTicksRemaining_ = 0;
+                    waveRuntime_.waveActive = false;
+                    simAccumulatorSeconds_ = 0.0;
+                    renderAlpha_ = 0.0f;
+                    return;
+                }
                 waitingForNextWave_ = true;
+                // End-of-wave reward: passive economy that grows with progress so players
+                // can afford the rising power curve even without perfect kill efficiency.
+                const int clearedWave = std::max(1, waveRuntime_.waveNumber);
+                const int baseBonus =
+                    config_.difficulty == 0 ? 25 : (config_.difficulty == 2 ? 15 : 20);
+                cash_ += baseBonus + clearedWave;
                 waveCooldownTicksRemaining_ = config_.difficulty == 2 ? 90 : (config_.difficulty == 0 ? 150 : kDefaultWaveCooldown);
             }
         }
@@ -1342,7 +1570,6 @@ void NativeEngine::updateBoardMetrics() {
 }
 
 void NativeEngine::renderBoard(float pulse) {
-    (void)pulse;
     if (tileSize_ <= 0.0f) {
         return;
     }
@@ -1360,6 +1587,15 @@ void NativeEngine::renderBoard(float pulse) {
     };
 
     const auto towerVisual = [](TowerKindId kind) -> TowerVisual {
+        if (kind == TowerKindId::Gatling || kind == TowerKindId::VulcanCiws) {
+            return TowerVisual{{110, 122, 82}, {126, 134, 120}, {255, 214, 150}, 0.7f, 0.92f, 0.34f, true, true, true};
+        }
+        if (kind == TowerKindId::Mortar || kind == TowerKindId::SiegeHowitzer) {
+            return TowerVisual{{107, 101, 82}, {138, 126, 102}, {255, 214, 170}, 0.6f, 0.85f, 0.32f, false, false, true};
+        }
+        if (kind == TowerKindId::Interceptor || kind == TowerKindId::AegisBattery) {
+            return TowerVisual{{82, 114, 126}, {102, 136, 160}, {156, 220, 214}, 0.6f, 0.78f, 0.22f, false, false, true};
+        }
         if (kind == TowerKindId::BeamEmitter) {
             return TowerVisual{{107, 155, 149}, {156, 160, 154}, {156, 220, 214}, 0.65f, 0.9f, 0.35f, true, true, true};
         }
@@ -1409,23 +1645,81 @@ void NativeEngine::renderBoard(float pulse) {
         };
     };
 
-    const auto drawObjectiveMarker = [this, &tileCenter](int col, int row, RgbColor primary, RgbColor secondary) {
+    const auto drawSpawnPortal = [this, &tileCenter, pulse](int col, int row) {
         const Point2D c = tileCenter(col, row);
-        drawShadow(renderer_, c.x, c.y + tileSize_ * 0.22f, tileSize_ * 0.8f, tileSize_ * 0.28f, 60);
-        renderer_.drawRect(
-            static_cast<float>(col) * tileSize_ + boardLeft_ + tileSize_ * 0.14f,
-            static_cast<float>(row) * tileSize_ + boardTop_ + tileSize_ * 0.14f,
-            tileSize_ * 0.72f,
-            tileSize_ * 0.72f,
-            rgba(primary.r, primary.g, primary.b, 210)
-        );
-        renderer_.drawRect(
-            static_cast<float>(col) * tileSize_ + boardLeft_ + tileSize_ * 0.28f,
-            static_cast<float>(row) * tileSize_ + boardTop_ + tileSize_ * 0.28f,
-            tileSize_ * 0.44f,
-            tileSize_ * 0.44f,
-            rgba(secondary.r, secondary.g, secondary.b, 225)
-        );
+        const float baseR = tileSize_ * 0.42f;
+        drawShadow(renderer_, c.x, c.y + tileSize_ * 0.2f, tileSize_ * 0.8f, tileSize_ * 0.28f, 55);
+
+        const RgbColor glow{96, 200, 150};
+        const float ringOuter = baseR * (1.05f + 0.18f * (1.0f - pulse));
+        const float ringInner = baseR * (0.74f + 0.22f * pulse);
+        drawCircleRing(renderer_, c.x, c.y, ringOuter, std::max(1.5f, tileSize_ * 0.05f), glow,
+                       static_cast<int>(70.0f + 60.0f * (1.0f - pulse)));
+        drawCircleRing(renderer_, c.x, c.y, ringInner, std::max(1.5f, tileSize_ * 0.06f), glow,
+                       static_cast<int>(110.0f + 80.0f * pulse));
+
+        // Dark well then a bright breathing core.
+        renderer_.drawCircle(c.x, c.y, baseR * 0.62f, rgba(6, 26, 18, 230), 28);
+        renderer_.drawCircle(c.x, c.y, baseR * 0.40f * (0.85f + 0.15f * pulse), rgba(150, 232, 178, 235), 24);
+
+        // Slowly rotating triangular spokes for an "energy" feel.
+        drawRegularPolygon(renderer_, c.x, c.y, baseR * 0.30f,
+                           3, static_cast<float>(simTimeSeconds_ * 1.5), rgba(212, 245, 212, 220));
+
+        // Directional chevron (1=left, 2=up, 3=right, 4=down).
+        const int dir = pathAt(col, row);
+        if (dir != 0) {
+            float ang = 0.0f;
+            switch (dir) {
+                case 1: ang = 3.14159265f; break;
+                case 2: ang = -1.57079633f; break;
+                case 3: ang = 0.0f; break;
+                case 4: ang = 1.57079633f; break;
+                default: break;
+            }
+            const float tip = baseR * 0.98f;
+            const float w = baseR * 0.42f;
+            const float bk = baseR * 0.48f;
+            drawOrientedTriangle(renderer_, c.x, c.y, ang,
+                                 Point2D{tip, 0.0f}, Point2D{bk, -w}, Point2D{bk, w},
+                                 rgba(224, 248, 224, 235));
+        }
+    };
+
+    // Objective fortress (the base the player defends): a layered keep with corner
+    // bastions and a core that pulses redder and brighter the more damaged the base is.
+    const auto drawExitFortress = [this, &tileCenter, pulse](int col, int row) {
+        const Point2D c = tileCenter(col, row);
+        const float s = tileSize_;
+        const float healthFrac = maxHealth_ > 0
+            ? std::clamp(static_cast<float>(health_) / static_cast<float>(maxHealth_), 0.0f, 1.0f)
+            : 1.0f;
+        const float danger = 1.0f - healthFrac;
+
+        drawShadow(renderer_, c.x, c.y + s * 0.22f, s * 0.85f, s * 0.3f, 70);
+
+        // Walls.
+        renderer_.drawRect(c.x - s * 0.40f, c.y - s * 0.40f, s * 0.80f, s * 0.80f, rgba(38, 22, 20, 235));
+        renderer_.drawRect(c.x - s * 0.34f, c.y - s * 0.34f, s * 0.68f, s * 0.68f, rgba(150, 70, 58, 235));
+
+        // Corner bastions.
+        const float b = s * 0.16f;
+        renderer_.drawRect(c.x - s * 0.40f, c.y - s * 0.40f, b, b, rgba(58, 30, 26, 240));
+        renderer_.drawRect(c.x + s * 0.40f - b, c.y - s * 0.40f, b, b, rgba(58, 30, 26, 240));
+        renderer_.drawRect(c.x - s * 0.40f, c.y + s * 0.40f - b, b, b, rgba(58, 30, 26, 240));
+        renderer_.drawRect(c.x + s * 0.40f - b, c.y + s * 0.40f - b, b, b, rgba(58, 30, 26, 240));
+
+        // Reactor core: hotter and more urgent as HP falls.
+        const float corePulse = 0.5f + 0.5f * pulse;
+        const int coreAlpha = static_cast<int>(180.0f + 60.0f * corePulse);
+        const RgbColor core{
+            232,
+            std::max(40, static_cast<int>(170.0f - 90.0f * danger)),
+            std::max(30, static_cast<int>(110.0f - 70.0f * danger)),
+        };
+        drawCircleRing(renderer_, c.x, c.y, s * (0.28f + 0.10f * corePulse * (0.6f + 0.8f * danger)),
+                       std::max(1.5f, s * 0.05f), core, coreAlpha);
+        renderer_.drawCircle(c.x, c.y, s * 0.16f, rgba(core.r, core.g, core.b, 240), 22);
     };
 
     const auto drawBaseTile = [this](int col, int row) {
@@ -1456,18 +1750,43 @@ void NativeEngine::renderBoard(float pulse) {
             boardLeft_ + (static_cast<float>(col) + 0.5f) * tileSize_,
             boardTop_ + (static_cast<float>(row) + 0.5f) * tileSize_,
         };
-        const float angle = ((dir - 1) % 2 == 0) ? 0.0f : 1.57079632679f;
-        drawOrientedRect(renderer_, c.x, c.y, angle, -tileSize_ * 0.18f, -tileSize_ * 0.04f, tileSize_ * 0.36f, tileSize_ * 0.08f, rgba(184, 203, 231));
+        // Chevron pointing in the actual travel direction so the lane's flow is obvious
+        // (1=left, 2=up, 3=right, 4=down).
+        float ang = 0.0f;
+        switch (dir) {
+            case 1: ang = 3.14159265f; break;
+            case 2: ang = -1.57079633f; break;
+            case 3: ang = 0.0f; break;
+            case 4: ang = 1.57079633f; break;
+            default: break;
+        }
+        const float t = tileSize_;
+        drawOrientedTriangle(renderer_, c.x, c.y, ang,
+                             Point2D{t * 0.16f, 0.0f}, Point2D{-t * 0.08f, -t * 0.12f}, Point2D{-t * 0.08f, t * 0.12f},
+                             rgba(150, 178, 214, 160));
     };
 
     const auto drawTowerBase = [this](float centerX, float centerY, const TowerVisual &style, int alpha) {
         const float size = style.radius * tileSize_;
-        renderer_.drawRect(centerX - size * 0.5f, centerY - size * 0.5f, size, size, rgba(0, 0, 0, 180 * alpha / 255));
-        renderer_.drawRect(centerX - size * 0.46f, centerY - size * 0.46f, size * 0.92f, size * 0.92f, rgba(style.color.r, style.color.g, style.color.b, alpha));
-        renderer_.drawRect(centerX - tileSize_ * 0.08f, centerY - tileSize_ * 0.1f, size * 0.4f, size * 0.28f, rgba(255, 255, 255, std::min(alpha, 35)));
+        const float r = size * 0.52f;
+        // Octagonal armored plate (drop shadow + body) for a less blocky turret.
+        drawRegularPolygon(renderer_, centerX, centerY, r + tileSize_ * 0.02f, 8, 0.39269908f, rgba(0, 0, 0, 180 * alpha / 255));
+        drawRegularPolygon(renderer_, centerX, centerY, r, 8, 0.39269908f, rgba(style.color.r, style.color.g, style.color.b, alpha));
+        // Recessed inner hub.
+        drawRegularPolygon(renderer_, centerX, centerY, r * 0.62f, 8, 0.39269908f,
+                           rgba(std::max(0, style.color.r - 30), std::max(0, style.color.g - 30), std::max(0, style.color.b - 30), alpha));
+        // Corner rivets.
+        const float ringRadius = r * 0.74f;
+        const float rivet = size * 0.06f;
+        for (int k = 0; k < 4; ++k) {
+            const float a = 0.78539816f + static_cast<float>(k) * 1.57079633f;
+            renderer_.drawCircle(centerX + std::cos(a) * ringRadius, centerY + std::sin(a) * ringRadius, rivet, rgba(38, 42, 38, alpha), 8);
+        }
+        // Top-light highlight.
+        renderer_.drawRect(centerX - size * 0.18f, centerY - size * 0.24f, size * 0.36f, size * 0.14f, rgba(255, 255, 255, std::min(alpha, 38)));
     };
 
-    const auto drawGenericTower = [this, &drawTowerBase, &towerVisual](const TowerInstance &tower, int alpha) {
+    const auto drawGenericTower = [this, &drawTowerBase, &towerVisual, pulse](const TowerInstance &tower, int alpha) {
         const TowerVisual style = towerVisual(tower.kindId);
         const float cx = tileCenterX(tower.col);
         const float cy = tileCenterY(tower.row);
@@ -1483,59 +1802,145 @@ void NativeEngine::renderBoard(float pulse) {
             drawOrientedRect(renderer_, cx, cy, angle, -style.length * tileSize_ * 0.36f, -tileSize_ * 0.06f, tileSize_ * 0.12f, tileSize_ * 0.12f, rgba(86, 95, 84, alpha));
             drawOrientedRect(renderer_, cx, cy, angle, -style.length * tileSize_ * 0.06f, -tileSize_ * 0.06f, tileSize_ * 0.12f, tileSize_ * 0.12f, rgba(86, 95, 84, alpha));
             drawOrientedRect(renderer_, cx, cy, angle, style.length * tileSize_ * 0.24f, -tileSize_ * 0.06f, tileSize_ * 0.12f, tileSize_ * 0.12f, rgba(86, 95, 84, alpha));
-        } else if (tower.kindId == TowerKindId::Rocket) {
-            drawOrientedRect(renderer_, cx, cy, angle, 0.0f, -style.width * tileSize_, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
-            drawOrientedRect(renderer_, cx, cy, angle, 0.0f, 0.0f, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
-            drawOrientedRect(renderer_, cx, cy, angle, tileSize_ * 0.02f, -style.width * tileSize_ + tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
-            drawOrientedRect(renderer_, cx, cy, angle, tileSize_ * 0.02f, tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
-            drawOrientedTriangle(renderer_, cx, cy, angle, {style.length * tileSize_, -style.width * tileSize_}, {style.length * tileSize_ + style.width * tileSize_ * 2.0f, -style.width * tileSize_ * 0.5f}, {style.length * tileSize_, 0.0f}, rgba(181, 82, 64, alpha));
-            drawOrientedTriangle(renderer_, cx, cy, angle, {style.length * tileSize_, style.width * tileSize_}, {style.length * tileSize_ + style.width * tileSize_ * 2.0f, style.width * tileSize_ * 0.5f}, {style.length * tileSize_, 0.0f}, rgba(181, 82, 64, alpha));
-            drawOrientedQuad(
-                renderer_, cx, cy, angle,
-                {-style.width * tileSize_ * 0.75f, -style.width * tileSize_ * 4.0f},
-                {-style.width * tileSize_ * 0.75f, style.width * tileSize_ * 4.0f},
-                {style.width * tileSize_ * 1.25f, style.width * tileSize_ * 1.5f},
-                {style.width * tileSize_ * 1.25f, -style.width * tileSize_ * 1.5f},
-                rgba(style.color.r, style.color.g, style.color.b, alpha)
-            );
-        } else if (tower.kindId == TowerKindId::MissileSilo) {
-            drawOrientedRect(renderer_, cx, cy, angle, 0.0f, -style.width * tileSize_, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
-            drawOrientedRect(renderer_, cx, cy, angle, 0.0f, 0.0f, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
-            drawOrientedRect(renderer_, cx, cy, angle, tileSize_ * 0.02f, -style.width * tileSize_ + tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
-            drawOrientedRect(renderer_, cx, cy, angle, tileSize_ * 0.02f, tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
-            drawOrientedTriangle(renderer_, cx, cy, angle, {style.length * tileSize_, -style.width * tileSize_}, {style.length * tileSize_ + style.width * tileSize_ * 2.0f, -style.width * tileSize_ * 0.5f}, {style.length * tileSize_, 0.0f}, rgba(style.color.r, style.color.g, style.color.b, alpha));
-            drawOrientedTriangle(renderer_, cx, cy, angle, {style.length * tileSize_, style.width * tileSize_}, {style.length * tileSize_ + style.width * tileSize_ * 2.0f, style.width * tileSize_ * 0.5f}, {style.length * tileSize_, 0.0f}, rgba(style.color.r, style.color.g, style.color.b, alpha));
-            drawOrientedQuad(
-                renderer_, cx, cy, angle,
-                {-style.width * tileSize_ * 0.75f, -style.width * tileSize_ * 4.0f},
-                {-style.width * tileSize_ * 0.75f, style.width * tileSize_ * 4.0f},
-                {style.width * tileSize_ * 1.25f, style.width * tileSize_ * 1.5f},
-                {style.width * tileSize_ * 1.25f, -style.width * tileSize_ * 1.5f},
-                rgba(74, 88, 104, alpha)
-            );
+        } else if (tower.kindId == TowerKindId::Rocket ||
+                   tower.kindId == TowerKindId::Interceptor ||
+                   tower.kindId == TowerKindId::AegisBattery) {
+            // Twin-tube rocket launcher on an armored cradle.
+            const float s = tileSize_;
+            const float recoil = tower.recoil * s * 0.12f;
+            drawRegularPolygon(renderer_, cx, cy, s * 0.34f, 6, 0.52359878f, rgba(0, 0, 0, 170 * alpha / 255));
+            drawRegularPolygon(renderer_, cx, cy, s * 0.30f, 6, 0.52359878f, rgba(style.color.r, style.color.g, style.color.b, alpha));
+            // Launcher housing.
+            drawOrientedRect(renderer_, cx, cy, angle, -s * 0.20f - recoil, -s * 0.22f, s * 0.42f, s * 0.44f, rgba(0, 0, 0, 150 * alpha / 255));
+            drawOrientedRect(renderer_, cx, cy, angle, -s * 0.18f - recoil, -s * 0.20f, s * 0.38f, s * 0.40f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
+            // Two loaded tubes with red warheads.
+            for (int tube = -1; tube <= 1; tube += 2) {
+                const float off = static_cast<float>(tube) * s * 0.12f;
+                drawOrientedRect(renderer_, cx, cy, angle, s * 0.02f - recoil, off - s * 0.06f, s * 0.40f, s * 0.12f, rgba(54, 60, 54, alpha));
+                drawOrientedTriangle(renderer_, cx, cy, angle,
+                                     Point2D{s * 0.42f - recoil, off - s * 0.06f},
+                                     Point2D{s * 0.60f - recoil, off},
+                                     Point2D{s * 0.42f - recoil, off + s * 0.06f},
+                                     rgba(196, 86, 64, alpha));
+            }
+            if (tower.flash > 0.02f) {
+                const float len = s * 0.60f + tower.flash * s * 0.30f;
+                drawOrientedTriangle(renderer_, cx, cy, angle,
+                                     Point2D{len, 0.0f}, Point2D{s * 0.42f, -s * 0.18f}, Point2D{s * 0.42f, s * 0.18f},
+                                     rgba(style.flash.r, style.flash.g, style.flash.b, static_cast<int>(180.0f * tower.flash) * alpha / 255));
+            }
+        } else if (tower.kindId == TowerKindId::MissileSilo ||
+                   tower.kindId == TowerKindId::Mortar ||
+                   tower.kindId == TowerKindId::SiegeHowitzer) {
+            // Heavy four-tube silo bunker with a rotating radar fin.
+            const float s = tileSize_;
+            const float recoil = tower.recoil * s * 0.10f;
+            drawRegularPolygon(renderer_, cx, cy, s * 0.42f, 8, 0.39269908f, rgba(0, 0, 0, 175 * alpha / 255));
+            drawRegularPolygon(renderer_, cx, cy, s * 0.38f, 8, 0.39269908f, rgba(style.color.r, style.color.g, style.color.b, alpha));
+            drawRegularPolygon(renderer_, cx, cy, s * 0.24f, 8, 0.39269908f,
+                               rgba(std::max(0, style.color.r - 28), std::max(0, style.color.g - 28), std::max(0, style.color.b - 28), alpha));
+            // Four staggered tubes (two per side) with warheads.
+            for (int tube = -1; tube <= 1; tube += 2) {
+                for (int row2 = 0; row2 < 2; ++row2) {
+                    const float off = static_cast<float>(tube) * (row2 == 0 ? s * 0.08f : s * 0.20f);
+                    drawOrientedRect(renderer_, cx, cy, angle, s * 0.02f - recoil, off - s * 0.045f, s * 0.36f, s * 0.09f, rgba(64, 70, 78, alpha));
+                    drawOrientedTriangle(renderer_, cx, cy, angle,
+                                         Point2D{s * 0.38f - recoil, off - s * 0.045f},
+                                         Point2D{s * 0.52f - recoil, off},
+                                         Point2D{s * 0.38f - recoil, off + s * 0.045f},
+                                         rgba(196, 86, 64, alpha));
+                }
+            }
+            // Slow rotating radar fin on top.
+            drawRegularPolygon(renderer_, cx, cy, s * 0.12f, 3, static_cast<float>(simTimeSeconds_ * 1.4),
+                               rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
+            if (tower.flash > 0.02f) {
+                const float len = s * 0.55f + tower.flash * s * 0.28f;
+                drawOrientedTriangle(renderer_, cx, cy, angle,
+                                     Point2D{len, 0.0f}, Point2D{s * 0.40f, -s * 0.16f}, Point2D{s * 0.40f, s * 0.16f},
+                                     rgba(style.flash.r, style.flash.g, style.flash.b, static_cast<int>(180.0f * tower.flash) * alpha / 255));
+            }
         } else if (tower.kindId == TowerKindId::Sniper) {
-            const float height = style.radius * tileSize_ * 0.8660254f;
-            const float back = -height / 3.0f;
-            const float front = height * 2.0f / 3.0f;
-            const float side = style.radius * tileSize_ * 0.5f;
-            drawOrientedTriangle(renderer_, cx, cy, angle, {back, -side}, {back, side}, {front, 0.0f}, rgba(0, 0, 0, 180 * alpha / 255));
-            drawOrientedTriangle(renderer_, cx, cy, angle, {back + tileSize_ * 0.02f, -side + tileSize_ * 0.02f}, {back + tileSize_ * 0.02f, side - tileSize_ * 0.02f}, {front - tileSize_ * 0.02f, 0.0f}, rgba(style.color.r, style.color.g, style.color.b, alpha));
-            drawOrientedRect(renderer_, cx, cy, angle, back - tileSize_ * 0.18f, -tileSize_ * 0.08f, tileSize_ * 0.22f, tileSize_ * 0.16f, rgba(148, 142, 128, alpha));
+            // Precision rifle: hex nest, long thin barrel, muzzle brake and scope.
+            const float s = tileSize_;
+            const float recoil = tower.recoil * s * 0.16f;
+            drawRegularPolygon(renderer_, cx, cy, s * 0.34f, 6, 0.52359878f, rgba(0, 0, 0, 165 * alpha / 255));
+            drawRegularPolygon(renderer_, cx, cy, s * 0.30f, 6, 0.52359878f, rgba(style.color.r, style.color.g, style.color.b, alpha));
+            // Receiver block.
+            drawOrientedRect(renderer_, cx, cy, angle, -s * 0.16f - recoil, -s * 0.10f, s * 0.30f, s * 0.20f, rgba(54, 58, 52, alpha));
+            // Long barrel.
+            drawOrientedRect(renderer_, cx, cy, angle, s * 0.06f - recoil, -s * 0.045f, s * 0.66f, s * 0.09f, rgba(0, 0, 0, 170 * alpha / 255));
+            drawOrientedRect(renderer_, cx, cy, angle, s * 0.07f - recoil, -s * 0.035f, s * 0.62f, s * 0.07f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
+            // Muzzle brake.
+            drawOrientedRect(renderer_, cx, cy, angle, s * 0.70f - recoil, -s * 0.06f, s * 0.10f, s * 0.12f, rgba(70, 74, 68, alpha));
+            // Scope.
+            drawOrientedRect(renderer_, cx, cy, angle, -s * 0.02f - recoil, -s * 0.16f, s * 0.18f, s * 0.07f, rgba(40, 44, 40, alpha));
+            if (tower.flash > 0.02f) {
+                const float len = s * 0.86f + tower.flash * s * 0.3f;
+                drawOrientedTriangle(renderer_, cx, cy, angle,
+                                     Point2D{len, 0.0f}, Point2D{s * 0.74f, -s * 0.10f}, Point2D{s * 0.74f, s * 0.10f},
+                                     rgba(style.flash.r, style.flash.g, style.flash.b, static_cast<int>(190.0f * tower.flash) * alpha / 255));
+            }
         } else if (tower.kindId == TowerKindId::Railgun) {
-            const float base = -style.length * tileSize_;
-            const float side = -style.width * tileSize_ * 0.5f;
-            drawOrientedRect(renderer_, cx, cy, angle, base, side, style.length * tileSize_ * 2.0f, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
-            drawOrientedRect(renderer_, cx, cy, angle, base + tileSize_ * 0.02f, side + tileSize_ * 0.02f, style.length * tileSize_ * 2.0f - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
-            drawOrientedRect(renderer_, cx, cy, angle, -style.radius * tileSize_ * 0.25f, -style.radius * tileSize_ * 0.25f, style.radius * tileSize_ * 0.5f, style.radius * tileSize_ * 0.5f, rgba(179, 70, 58, alpha));
+            // Twin-rail electromagnetic cannon with a charging core between the rails.
+            const float s = tileSize_;
+            const float recoil = tower.recoil * s * 0.18f;
+            drawRegularPolygon(renderer_, cx, cy, s * 0.40f, 8, 0.39269908f, rgba(0, 0, 0, 175 * alpha / 255));
+            drawRegularPolygon(renderer_, cx, cy, s * 0.36f, 8, 0.39269908f, rgba(style.color.r, style.color.g, style.color.b, alpha));
+            // Breech.
+            drawOrientedRect(renderer_, cx, cy, angle, -s * 0.22f - recoil, -s * 0.16f, s * 0.30f, s * 0.32f, rgba(48, 52, 60, alpha));
+            // Two parallel rails.
+            for (int rail = -1; rail <= 1; rail += 2) {
+                const float off = static_cast<float>(rail) * s * 0.10f;
+                drawOrientedRect(renderer_, cx, cy, angle, s * 0.02f - recoil, off - s * 0.035f, s * 0.78f, s * 0.07f, rgba(0, 0, 0, 170 * alpha / 255));
+                drawOrientedRect(renderer_, cx, cy, angle, s * 0.03f - recoil, off - s * 0.025f, s * 0.74f, s * 0.05f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
+            }
+            // Glowing charge core between the rails.
+            const float glowPulse = 0.5f + 0.5f * pulse;
+            drawCircleRing(renderer_, cx, cy, s * (0.12f + 0.04f * glowPulse), std::max(1.0f, s * 0.03f), RgbColor{120, 180, 255}, static_cast<int>((120.0f + 90.0f * glowPulse) * alpha / 255));
+            renderer_.drawCircle(cx, cy, s * 0.07f, rgba(150, 200, 255, alpha), 16);
+            if (tower.flash > 0.02f) {
+                const float len = s * 0.92f + tower.flash * s * 0.35f;
+                drawOrientedRect(renderer_, cx, cy, angle, s * 0.40f, -s * 0.03f, len - s * 0.40f, s * 0.06f, rgba(179, 70, 58, static_cast<int>(200.0f * tower.flash) * alpha / 255));
+            }
         } else if (tower.kindId == TowerKindId::Bomb || tower.kindId == TowerKindId::ClusterBomb) {
             drawOrientedRect(renderer_, cx, cy, angle, 0.0f, -style.width * tileSize_ * 0.5f, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
             drawOrientedRect(renderer_, cx, cy, angle, tileSize_ * 0.02f, -style.width * tileSize_ * 0.5f + tileSize_ * 0.02f, style.length * tileSize_ - tileSize_ * 0.04f, style.width * tileSize_ - tileSize_ * 0.04f, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
             const int accent = tower.kindId == TowerKindId::ClusterBomb ? 202 : 171;
             drawOrientedRect(renderer_, cx, cy, angle, -style.radius * tileSize_ * 0.25f, -style.radius * tileSize_ * 0.25f, style.radius * tileSize_ * 0.5f, style.radius * tileSize_ * 0.5f, rgba(accent, 138, 76, alpha));
         } else if (tower.kindId == TowerKindId::Tesla || tower.kindId == TowerKindId::Plasma) {
-            drawRegularPolygon(renderer_, cx, cy, style.radius * tileSize_ * 0.25f, 6, angle, rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
-            const float core = (tower.kindId == TowerKindId::Plasma ? 0.6f : 0.55f) * tileSize_;
-            renderer_.drawRect(cx - core * 0.5f, cy - core * 0.5f, core, core, rgba(style.color.r, style.color.g, style.color.b, alpha));
+            // Tesla: electrode prongs around a charged capacitor core, sparking.
+            // Plasma: bigger glowing orb with a rotating containment ring.
+            const float s = tileSize_;
+            const bool isPlasma = tower.kindId == TowerKindId::Plasma;
+            const float baseR = (isPlasma ? 0.40f : 0.36f) * s;
+            const float spin = static_cast<float>(simTimeSeconds_ * (isPlasma ? 2.2 : 1.6));
+            const float glowPulse = 0.5f + 0.5f * pulse;
+            // Base plate.
+            drawRegularPolygon(renderer_, cx, cy, baseR, 8, 0.39269908f, rgba(0, 0, 0, 170 * alpha / 255));
+            drawRegularPolygon(renderer_, cx, cy, baseR * 0.9f, 8, 0.39269908f, rgba(style.color.r, style.color.g, style.color.b, alpha));
+            // Electrode prongs radiating outward.
+            const int prongs = isPlasma ? 6 : 4;
+            for (int p = 0; p < prongs; ++p) {
+                const float a = spin + static_cast<float>(p) / static_cast<float>(prongs) * 6.2831853f;
+                const float ix = cx + std::cos(a) * baseR * 0.45f;
+                const float iy = cy + std::sin(a) * baseR * 0.45f;
+                const float ox = cx + std::cos(a) * baseR * 0.95f;
+                const float oy = cy + std::sin(a) * baseR * 0.95f;
+                renderer_.drawLine(ix, iy, ox, oy, std::max(1.5f, s * 0.05f), rgba(style.secondary.r, style.secondary.g, style.secondary.b, alpha));
+                renderer_.drawCircle(ox, oy, s * 0.05f, rgba(180, 210, 235, alpha), 8);
+            }
+            // Containment ring (plasma) / spark ring (tesla).
+            drawCircleRing(renderer_, cx, cy, baseR * (0.62f + 0.06f * glowPulse), std::max(1.0f, s * 0.035f),
+                           RgbColor{150, 210, 245}, static_cast<int>((120.0f + 100.0f * glowPulse) * alpha / 255));
+            // Glowing core.
+            const RgbColor coreCol = isPlasma ? RgbColor{160, 235, 235} : RgbColor{150, 205, 235};
+            renderer_.drawCircle(cx, cy, baseR * (0.34f + 0.06f * glowPulse), rgba(coreCol.r, coreCol.g, coreCol.b, alpha), 20);
+            renderer_.drawCircle(cx, cy, baseR * 0.18f, rgba(255, 255, 255, std::min(alpha, 210)), 14);
+            if (tower.flash > 0.02f) {
+                drawCircleRing(renderer_, cx, cy, baseR * (1.0f + tower.flash), std::max(1.0f, s * 0.04f),
+                               coreCol, static_cast<int>(200.0f * tower.flash) * alpha / 255);
+            }
         } else {
             const float recoil = tower.recoil * tileSize_ * 0.16f;
             drawOrientedRect(renderer_, cx, cy, angle, -recoil, -style.width * tileSize_ * 0.5f, style.length * tileSize_, style.width * tileSize_, rgba(0, 0, 0, 180 * alpha / 255));
@@ -1574,18 +1979,78 @@ void NativeEngine::renderBoard(float pulse) {
     }
 
     for (size_t index = 0; index + 1 < spawnPoints_.size(); index += 2) {
-        drawObjectiveMarker(spawnPoints_[index], spawnPoints_[index + 1], {84, 142, 84}, {178, 208, 122});
+        drawSpawnPortal(spawnPoints_[index], spawnPoints_[index + 1]);
     }
-    drawObjectiveMarker(exitCol_, exitRow_, {144, 70, 58}, {232, 173, 120});
+    drawExitFortress(exitCol_, exitRow_);
 
     for (int i = 0; i <= boardCols_; ++i) {
-        const float x = boardLeft_ + static_cast<float>(i) * tileSize_;
+        // Snap to a pixel centre so every line covers exactly one device pixel.
+        // Without this, fractional tileSize_ puts each line at a different
+        // sub-pixel offset, so 1px lines blend across two columns by varying
+        // amounts and the grid looks inconsistently dark/light.
+        const float x =
+            std::floor(boardLeft_ + static_cast<float>(i) * tileSize_) + 0.5f;
         renderer_.drawLine(x, boardTop_, x, boardTop_ + boardHeight, 1.0f, rgba(224, 232, 241, 78));
     }
     for (int j = 0; j <= boardRows_; ++j) {
-        const float y = boardTop_ + static_cast<float>(j) * tileSize_;
+        const float y =
+            std::floor(boardTop_ + static_cast<float>(j) * tileSize_) + 0.5f;
         renderer_.drawLine(boardLeft_, y, boardLeft_ + boardWidth, y, 1.0f, rgba(224, 232, 241, 78));
     }
+
+    // Samples the enemy's position history at a given pixel distance behind the
+    // head, interpolating between recorded ticks. Lets multi-segment bodies bend
+    // naturally around corners instead of being a rigid line.
+    const auto trailSampleAt = [](const EnemyInstance &e, float distPx) -> Point2D {
+        const int n = EnemyInstance::kTrailSamples;
+        int idx = e.trailHead;
+        float px = e.trailX[idx];
+        float py = e.trailY[idx];
+        float remaining = distPx;
+        for (int step = 1; step < e.trailFilled; ++step) {
+            const int prev = (idx - 1 + n) % n;
+            const float qx = e.trailX[prev];
+            const float qy = e.trailY[prev];
+            const float dx = px - qx;
+            const float dy = py - qy;
+            const float seg = std::sqrt(dx * dx + dy * dy);
+            if (seg >= remaining) {
+                const float t = seg > 0.0001f ? remaining / seg : 0.0f;
+                return Point2D{px + (qx - px) * t, py + (qy - py) * t};
+            }
+            remaining -= seg;
+            px = qx;
+            py = qy;
+            idx = prev;
+        }
+        return Point2D{px, py};
+    };
+
+    // Draws a chain of overlapping body segments that trail the head along the
+    // recorded path (snake / centipede style).
+    const auto drawSegmentedEnemy = [this, &trailSampleAt, pulse](
+        const EnemyInstance &enemy, float headX, float headY,
+        RgbColor primary, RgbColor secondary, int segCount, bool glowCore) {
+        const float r = enemy.radius * tileSize_ * 0.52f;
+        const float spacing = r * 1.35f;
+        for (int i = segCount - 1; i >= 0; --i) {
+            const Point2D p = (i == 0)
+                ? Point2D{headX, headY}
+                : trailSampleAt(enemy, spacing * static_cast<float>(i));
+            const float segR = r * (1.0f - 0.10f * static_cast<float>(i));
+            drawShadow(renderer_, p.x, p.y + tileSize_ * 0.14f, segR * 1.5f, segR * 0.66f, 48);
+            drawRegularPolygon(renderer_, p.x, p.y, segR + tileSize_ * 0.02f, 6, 0.52359878f, rgba(16, 16, 14, 235));
+            const int shade = i == 0 ? 0 : 18;
+            drawRegularPolygon(renderer_, p.x, p.y, segR, 6, 0.52359878f,
+                               rgba(std::max(0, primary.r - shade), std::max(0, primary.g - shade), std::max(0, primary.b - shade), 255));
+            drawRegularPolygon(renderer_, p.x, p.y, segR * 0.5f, 6, 0.52359878f,
+                               rgba(secondary.r, secondary.g, secondary.b, 255));
+            if (glowCore) {
+                const float gp = 0.5f + 0.5f * pulse;
+                renderer_.drawCircle(p.x, p.y, segR * (0.28f + 0.08f * gp), rgba(255, 226, 130, static_cast<int>(180.0f + 60.0f * gp)), 12);
+            }
+        }
+    };
 
     for (const EnemyInstance &enemy : enemies_) {
         if (!enemy.alive) {
@@ -1599,7 +2064,19 @@ void NativeEngine::renderBoard(float pulse) {
         const RgbColor secondary = palette.secondary;
         const float angle = std::atan2(enemy.vy, enemy.vx);
 
-        if (enemy.archetype == EnemyArchetypeId::Fast ||
+        if (enemy.archetype == EnemyArchetypeId::Spawner ||
+            enemy.archetype == EnemyArchetypeId::Stronger) {
+            // Multi-segment "snake" bodies that bend around corners. Spawner is a
+            // 3-segment glowing centipede; Stronger is a heavier 2-segment crawler.
+            const int segCount = enemy.archetype == EnemyArchetypeId::Spawner ? 3 : 2;
+            const bool glow = enemy.archetype == EnemyArchetypeId::Spawner;
+            drawSegmentedEnemy(enemy, enemyX, enemyY, primary, secondary, segCount, glow);
+            // Head sensor facing travel.
+            drawOrientedRect(renderer_, enemyX, enemyY, angle,
+                             enemy.radius * tileSize_ * 0.16f, -enemy.radius * tileSize_ * 0.16f,
+                             enemy.radius * tileSize_ * 0.34f, enemy.radius * tileSize_ * 0.32f,
+                             rgba(255, 255, 255, 60 + static_cast<int>(enemy.hitFlash * 120.0f)));
+        } else if (enemy.archetype == EnemyArchetypeId::Fast ||
             enemy.archetype == EnemyArchetypeId::StrongFast ||
             enemy.archetype == EnemyArchetypeId::Faster) {
             const int baseAlpha = 255;
@@ -1633,15 +2110,51 @@ void NativeEngine::renderBoard(float pulse) {
                 renderer_.drawCircle(enemyX, enemyY, 0.2f * tileSize_, secondaryColor, 18);
                 renderer_.drawRect(enemyX - front + tileSize_ * 0.08f, enemyY - side + tileSize_ * 0.06f, tileSize_ * 0.32f, tileSize_ * 0.14f, rgba(255, 255, 255, 22));
             } else if (enemy.archetype == EnemyArchetypeId::Taunt) {
-                const float edge = enemy.radius * tileSize_ * 0.5f;
-                renderer_.drawRect(enemyX - edge, enemyY - edge, enemy.radius * tileSize_, enemy.radius * tileSize_, rgba(0, 0, 0, 180));
-                renderer_.drawRect(enemyX - edge + tileSize_ * 0.02f, enemyY - edge + tileSize_ * 0.02f, enemy.radius * tileSize_ - tileSize_ * 0.04f, enemy.radius * tileSize_ - tileSize_ * 0.04f, primaryColor);
-                drawAxisAlignedRectOutline(renderer_, enemyX - 0.3f * tileSize_, enemyY - 0.3f * tileSize_, 0.6f * tileSize_, 0.6f * tileSize_, 1.0f, secondaryColor);
-                drawAxisAlignedRectOutline(renderer_, enemyX - 0.2f * tileSize_, enemyY - 0.2f * tileSize_, 0.4f * tileSize_, 0.4f * tileSize_, 1.0f, secondaryColor);
+                // Spiky, rotating six-point star with an aggressive pulsing aura that
+                // signals "shoot me first".
+                const float rr = enemy.radius * tileSize_ * 0.62f;
+                const float spin = static_cast<float>(simTimeSeconds_ * 0.8);
+                drawCircleRing(renderer_, enemyX, enemyY, rr * (1.05f + 0.12f * pulse),
+                               std::max(1.0f, tileSize_ * 0.04f), RgbColor{214, 150, 80},
+                               static_cast<int>(80.0f + 90.0f * pulse));
+                drawRegularPolygon(renderer_, enemyX, enemyY, rr, 3, spin, rgba(0, 0, 0, 200));
+                drawRegularPolygon(renderer_, enemyX, enemyY, rr, 3, spin + 1.04719755f, rgba(0, 0, 0, 200));
+                drawRegularPolygon(renderer_, enemyX, enemyY, rr * 0.92f, 3, spin, primaryColor);
+                drawRegularPolygon(renderer_, enemyX, enemyY, rr * 0.92f, 3, spin + 1.04719755f, primaryColor);
+                renderer_.drawCircle(enemyX, enemyY, rr * 0.40f, secondaryColor, 16);
+                renderer_.drawCircle(enemyX, enemyY, rr * 0.18f, rgba(255, 230, 180, 235), 12);
             } else {
-                renderer_.drawRect(enemyX - size * 0.5f, enemyY - size * 0.5f, size, size, rgba(28, 26, 22));
-                renderer_.drawRect(enemyX - size * 0.46f, enemyY - size * 0.46f, size * 0.92f, size * 0.92f, primaryColor);
-                renderer_.drawRect(enemyX - tileSize_ * 0.06f, enemyY - tileSize_ * 0.08f, enemy.radius * tileSize_ * 0.32f, enemy.radius * tileSize_ * 0.18f, rgba(255, 255, 255, 34 + static_cast<int>(enemy.hitFlash * 100.0f)));
+                // Beveled hex body: a rounder, mechier silhouette than a flat square,
+                // with a recessed core and a directional sensor facing travel.
+                const float bodyR = size * 0.56f;
+                drawRegularPolygon(renderer_, enemyX, enemyY, bodyR + tileSize_ * 0.02f, 6, 0.52359878f, rgba(20, 20, 18, 235));
+                drawRegularPolygon(renderer_, enemyX, enemyY, bodyR, 6, 0.52359878f, primaryColor);
+                drawRegularPolygon(renderer_, enemyX, enemyY, bodyR * 0.55f, 6, 0.52359878f,
+                                   rgba(std::max(0, primary.r - 26), std::max(0, primary.g - 26), std::max(0, primary.b - 26), 255));
+                drawOrientedRect(renderer_, enemyX, enemyY, angle, bodyR * 0.18f, -size * 0.09f, size * 0.28f, size * 0.18f,
+                                 rgba(255, 255, 255, 55 + static_cast<int>(enemy.hitFlash * 120.0f)));
+
+                // Archetype "tells" so a player can read threat type at a glance.
+                if (enemy.archetype == EnemyArchetypeId::Medic) {
+                    const float arm = size * 0.30f;
+                    const float thick = size * 0.12f;
+                    renderer_.drawRect(enemyX - thick * 0.5f, enemyY - arm * 0.5f, thick, arm, rgba(245, 250, 250, 235));
+                    renderer_.drawRect(enemyX - arm * 0.5f, enemyY - thick * 0.5f, arm, thick, rgba(245, 250, 250, 235));
+                    drawCircleRing(renderer_, enemyX, enemyY, size * (0.55f + 0.15f * pulse),
+                                   std::max(1.0f, tileSize_ * 0.03f), RgbColor{198, 86, 74},
+                                   static_cast<int>(70.0f + 70.0f * pulse));
+                } else if (enemy.archetype == EnemyArchetypeId::Spawner) {
+                    drawRegularPolygon(renderer_, enemyX, enemyY, size * 0.30f, 6,
+                                       static_cast<float>(simTimeSeconds_ * 1.2), secondaryColor);
+                    renderer_.drawCircle(enemyX, enemyY, size * 0.12f, rgba(28, 26, 22, 235), 16);
+                } else if (enemy.archetype == EnemyArchetypeId::Stronger) {
+                    const float rr = size * 0.07f;
+                    const float o = size * 0.30f;
+                    renderer_.drawCircle(enemyX - o, enemyY - o, rr, secondaryColor, 10);
+                    renderer_.drawCircle(enemyX + o, enemyY - o, rr, secondaryColor, 10);
+                    renderer_.drawCircle(enemyX - o, enemyY + o, rr, secondaryColor, 10);
+                    renderer_.drawCircle(enemyX + o, enemyY + o, rr, secondaryColor, 10);
+                }
             }
         }
 
@@ -1746,8 +2259,8 @@ void NativeEngine::renderBoard(float pulse) {
         if (!projectile.alive) {
             continue;
         }
-        const float projectileX = projectile.prevX + (projectile.x - projectile.prevX) * renderAlpha_;
-        const float projectileY = projectile.prevY + (projectile.y - projectile.prevY) * renderAlpha_;
+        float projectileX = projectile.prevX + (projectile.x - projectile.prevX) * renderAlpha_;
+        float projectileY = projectile.prevY + (projectile.y - projectile.prevY) * renderAlpha_;
         float angle = std::atan2(projectile.vy, projectile.vx);
         if (std::abs(projectile.vx) < 0.0001f && std::abs(projectile.vy) < 0.0001f) {
             const int targetIndex = findEnemyIndexById(projectile.targetEnemyId);
@@ -1760,6 +2273,20 @@ void NativeEngine::renderBoard(float pulse) {
         }
         const float length = 0.6f * tileSize_;
         const float width = 0.2f * tileSize_;
+        // Ballistic shells arc above the board: draw a ground shadow and lift the
+        // shell sprite by a sine arc that peaks mid-flight.
+        if (projectile.motion == towerdefense::ProjectileMotion::Ballistic &&
+            projectile.launchDist > 0.0001f) {
+            const float dxg = projectile.groundX - projectileX;
+            const float dyg = projectile.groundY - projectileY;
+            const float remain = std::sqrt(dxg * dxg + dyg * dyg);
+            const float progress = std::clamp(1.0f - remain / projectile.launchDist, 0.0f, 1.0f);
+            const float lift = std::sin(progress * 3.14159265f) * projectile.arcHeight;
+            if (config_.effects) {
+                renderer_.drawCircle(projectileX, projectileY, tileSize_ * 0.12f, rgba(0, 0, 0, 80), 12);
+            }
+            projectileY -= lift;
+        }
         const float base = length * 0.5f;
         const float side = width * 0.5f;
         const float tip = base + width * 2.0f;
@@ -2012,7 +2539,7 @@ void NativeEngine::loadMapById(const std::string &mapId) {
     clearPlacementCountdown();
     health_ = 40;
     maxHealth_ = 40;
-    cash_ = 55;
+    cash_ = 60;
     kills_ = 0;
     userPaused_ = true;
     lifecyclePaused_ = false;
@@ -2143,6 +2670,20 @@ void NativeEngine::spawnEnemyAt(int spawnCol, int spawnRow, const std::string &a
     if (isProceduralMapId(mapId_)) {
         blueprint.baseSpeed *= proceduralEnemySpeedScale_;
     }
+
+    // Smooth per-wave difficulty ramp. Base archetype HP is authored content; the
+    // wave multiplier turns "archetype swaps" into a continuous curve so every wave
+    // is a little tougher than the last instead of spiking only when a new type
+    // appears. Kill cash grows at a slower rate so the economy keeps pace without
+    // runaway inflation.
+    const int wave = std::max(1, waveRuntime_.waveNumber);
+    const float difficultyFactor =
+        config_.difficulty == 0 ? 0.85f : (config_.difficulty == 2 ? 1.20f : 1.0f);
+    const float healthMultiplier = (1.0f + 0.08f * static_cast<float>(wave - 1)) * difficultyFactor;
+    const float cashMultiplier = 1.0f + 0.04f * static_cast<float>(wave - 1);
+    blueprint.health = std::max(1.0f, blueprint.health * healthMultiplier);
+    blueprint.cash = std::max(1, static_cast<int>(std::round(static_cast<float>(blueprint.cash) * cashMultiplier)));
+
     enemies_.push_back(makeEnemyInstance(
         waveRuntime_.nextEnemyId++,
         spawnCol,
@@ -2563,7 +3104,13 @@ void NativeEngine::updateTowers() {
     };
 
     const auto rollDamage = [this](const TowerInstance &tower) -> float {
-        return std::round(randomRange(tower.damageMin, tower.damageMax));
+        // Status-only towers (slow/poison) intentionally deal no direct damage.
+        if (tower.damageMax <= 0.0f) {
+            return 0.0f;
+        }
+        // Damage floor: a damage-dealing tower must never round down to a 0-damage hit,
+        // and upgrades must never regress to harmless. Enforces the content invariant.
+        return std::max(1.0f, std::round(randomRange(tower.damageMin, tower.damageMax)));
     };
 
     for (TowerInstance &tower : towers_) {
@@ -2602,7 +3149,7 @@ void NativeEngine::updateTowers() {
 
         if (tower.kindId == TowerKindId::Slow || tower.kindId == TowerKindId::Poison) {
             const EnemyInstance &visualTarget = enemies_[static_cast<size_t>(candidates.front())];
-            tower.angle = std::atan2(visualTarget.y - centerY, visualTarget.x - centerX);
+            tower.targetAngle = std::atan2(visualTarget.y - centerY, visualTarget.x - centerX);
             tower.beamTargetX = visualTarget.x;
             tower.beamTargetY = visualTarget.y;
             if (tower.cooldown > 0) {
@@ -2628,7 +3175,9 @@ void NativeEngine::updateTowers() {
         }
 
         int targetIndex = -1;
-        if (tower.kindId == TowerKindId::Rocket || tower.kindId == TowerKindId::MissileSilo) {
+        if (tower.kindId == TowerKindId::Rocket || tower.kindId == TowerKindId::MissileSilo ||
+            tower.kindId == TowerKindId::Mortar || tower.kindId == TowerKindId::SiegeHowitzer ||
+            tower.kindId == TowerKindId::Interceptor || tower.kindId == TowerKindId::AegisBattery) {
             float bestDistance = 1e30f;
             for (int index : candidates) {
                 const EnemyInstance &enemy = enemies_[static_cast<size_t>(index)];
@@ -2678,7 +3227,7 @@ void NativeEngine::updateTowers() {
         }
 
         EnemyInstance &enemy = enemies_[static_cast<size_t>(targetIndex)];
-        tower.angle = std::atan2(enemy.y - centerY, enemy.x - centerX);
+        tower.targetAngle = std::atan2(enemy.y - centerY, enemy.x - centerX);
         tower.beamTargetX = enemy.x;
         tower.beamTargetY = enemy.y;
         const std::string_view damageType = damageTypeForTower(tower.kindId);
@@ -2701,7 +3250,9 @@ void NativeEngine::updateTowers() {
 
         prepareTowerFireState(tower, enemy, boardLeft_, boardTop_, tileSize_, rollCooldown(tower));
 
-        if (tower.kindId == TowerKindId::Rocket || tower.kindId == TowerKindId::MissileSilo) {
+        if (tower.kindId == TowerKindId::Rocket || tower.kindId == TowerKindId::MissileSilo ||
+            tower.kindId == TowerKindId::Mortar || tower.kindId == TowerKindId::SiegeHowitzer ||
+            tower.kindId == TowerKindId::Interceptor || tower.kindId == TowerKindId::AegisBattery) {
             ProjectileInstance projectile;
             projectile.x = centerX;
             projectile.y = centerY;
@@ -2709,13 +3260,56 @@ void NativeEngine::updateTowers() {
             projectile.prevY = centerY;
             projectile.damageMin = tower.damageMin;
             projectile.damageMax = tower.damageMax;
-            projectile.splashRadius = tower.kindId == TowerKindId::MissileSilo ? 2.0f : 1.0f;
-            projectile.accAmt = (tower.kindId == TowerKindId::MissileSilo ? 0.7f : 0.6f) * tileSize_ / 24.0f;
-            projectile.topSpeed = (tower.kindId == TowerKindId::MissileSilo ? 6.0f : 4.0f) * tileSize_ / 24.0f;
-            projectile.lifetime = 60;
-            projectile.trailCooldown = 0;
             projectile.range = tower.range;
             projectile.targetEnemyId = enemy.id;
+            projectile.trailCooldown = 0;
+
+            const bool isMortar = tower.kindId == TowerKindId::Mortar ||
+                                  tower.kindId == TowerKindId::SiegeHowitzer;
+            const bool isInterceptor = tower.kindId == TowerKindId::Interceptor ||
+                                       tower.kindId == TowerKindId::AegisBattery;
+
+            if (isMortar) {
+                // Artillery: a lobbed shell on a fixed ballistic arc toward the
+                // target's ground position. Big splash, slow flight, high arc.
+                projectile.motion = towerdefense::ProjectileMotion::Ballistic;
+                projectile.splashRadius =
+                    tower.kindId == TowerKindId::SiegeHowitzer ? 2.4f : 1.7f;
+                const float dxg = enemy.x - centerX;
+                const float dyg = enemy.y - centerY;
+                const float dist = std::sqrt(dxg * dxg + dyg * dyg);
+                projectile.groundX = enemy.x;
+                projectile.groundY = enemy.y;
+                projectile.launchDist = std::max(1.0f, dist);
+                projectile.arcHeight = std::min(dist * 0.35f, 3.5f * tileSize_);
+                const float shellSpeed =
+                    (tower.kindId == TowerKindId::SiegeHowitzer ? 5.5f : 4.5f) * tileSize_ / 24.0f;
+                projectile.topSpeed = shellSpeed;
+                if (dist > 0.0001f) {
+                    projectile.vx = dxg / dist * shellSpeed;
+                    projectile.vy = dyg / dist * shellSpeed;
+                }
+                projectile.accAmt = 0.0f;
+                projectile.lifetime = 240;
+            } else if (isInterceptor) {
+                // SAM: fast lead-pursuit interceptor with strong steering.
+                projectile.motion = towerdefense::ProjectileMotion::Interceptor;
+                projectile.splashRadius =
+                    tower.kindId == TowerKindId::AegisBattery ? 1.3f : 1.0f;
+                projectile.accAmt =
+                    (tower.kindId == TowerKindId::AegisBattery ? 1.1f : 0.95f) * tileSize_ / 24.0f;
+                projectile.topSpeed =
+                    (tower.kindId == TowerKindId::AegisBattery ? 8.5f : 7.5f) * tileSize_ / 24.0f;
+                projectile.lifetime = 90;
+            } else {
+                // Rocket / Missile Silo: classic homing missile (unchanged).
+                projectile.motion = towerdefense::ProjectileMotion::Homing;
+                projectile.splashRadius = tower.kindId == TowerKindId::MissileSilo ? 2.0f : 1.0f;
+                projectile.accAmt = (tower.kindId == TowerKindId::MissileSilo ? 0.7f : 0.6f) * tileSize_ / 24.0f;
+                projectile.topSpeed = (tower.kindId == TowerKindId::MissileSilo ? 6.0f : 4.0f) * tileSize_ / 24.0f;
+                projectile.lifetime = 60;
+            }
+
             projectiles_.push_back(projectile);
             queueAudioEvent(SoundType::Missile);
             continue;
@@ -2812,7 +3406,10 @@ void NativeEngine::updateTowers() {
 
         if (tower.kindId == TowerKindId::BeamEmitter) {
             const float baseDamage = std::max(1.0f, randomRange(tower.damageMin, tower.damageMax));
-            const float charge = static_cast<float>(std::max(1, tower.beamChargeTicks));
+            // Beam ramps the longer it dwells on one target, but the growth is capped so a
+            // single beam cannot delete whole waves (balance: bounded charge multiplier).
+            constexpr int kMaxBeamCharge = 3;
+            const float charge = static_cast<float>(std::clamp(tower.beamChargeTicks, 1, kMaxBeamCharge));
             dealDamage(enemy, baseDamage * charge * charge, damageType);
             continue;
         }

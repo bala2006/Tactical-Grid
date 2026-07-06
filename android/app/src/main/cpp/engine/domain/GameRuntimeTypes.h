@@ -24,7 +24,21 @@ enum class TowerKindId : std::uint8_t {
     ClusterBomb,
     Tesla,
     Plasma,
+    Gatling,
+    VulcanCiws,
+    Mortar,
+    SiegeHowitzer,
+    Interceptor,
+    AegisBattery,
     Unknown,
+};
+
+// How a projectile travels to its target. Different real-world weapon families
+// move very differently, so the projectile carries its own motion model.
+enum class ProjectileMotion : std::uint8_t {
+    Homing = 0,      // continuously steers toward a live target (rockets)
+    Ballistic = 1,   // lobbed shell on a fixed arc toward a ground point (mortar)
+    Interceptor = 2, // aggressive homing that leads the target's movement (SAM)
 };
 
 enum class EnemyArchetypeId : std::uint8_t {
@@ -57,6 +71,12 @@ inline constexpr std::string_view towerKindIdName(TowerKindId id) {
         case TowerKindId::ClusterBomb: return "clusterBomb";
         case TowerKindId::Tesla: return "tesla";
         case TowerKindId::Plasma: return "plasma";
+        case TowerKindId::Gatling: return "gatling";
+        case TowerKindId::VulcanCiws: return "vulcanCiws";
+        case TowerKindId::Mortar: return "mortar";
+        case TowerKindId::SiegeHowitzer: return "siegeHowitzer";
+        case TowerKindId::Interceptor: return "interceptor";
+        case TowerKindId::AegisBattery: return "aegisBattery";
         default: return "gun";
     }
 }
@@ -76,6 +96,12 @@ inline constexpr TowerKindId parseTowerKindId(std::string_view name) {
         : name == "clusterBomb" ? TowerKindId::ClusterBomb
         : name == "tesla" ? TowerKindId::Tesla
         : name == "plasma" ? TowerKindId::Plasma
+        : name == "gatling" ? TowerKindId::Gatling
+        : name == "vulcanCiws" ? TowerKindId::VulcanCiws
+        : name == "mortar" ? TowerKindId::Mortar
+        : name == "siegeHowitzer" ? TowerKindId::SiegeHowitzer
+        : name == "interceptor" ? TowerKindId::Interceptor
+        : name == "aegisBattery" ? TowerKindId::AegisBattery
         : TowerKindId::Unknown;
 }
 
@@ -111,7 +137,7 @@ inline constexpr EnemyArchetypeId parseEnemyArchetypeId(std::string_view name) {
 
 struct EnemyRuntime {
     int id = 0;
-    std::string archetypeId = "grunt";
+    std::string archetypeId = "weak";
     EnemyArchetypeId archetype = EnemyArchetypeId::Weak;
     float prevX = 0.0f;
     float prevY = 0.0f;
@@ -133,6 +159,14 @@ struct EnemyRuntime {
     int damage = 1;
     int supportCooldownTicks = 0;
     bool alive = true;
+
+    // Short position history (ring buffer) used to render multi-segment "snake"
+    // bodies that correctly bend around corners. Updated once per fixed tick.
+    static constexpr int kTrailSamples = 18;
+    float trailX[kTrailSamples] = {0};
+    float trailY[kTrailSamples] = {0};
+    int trailHead = 0;    // index of the most recent sample
+    int trailFilled = 0;  // number of valid samples (<= kTrailSamples)
 };
 
 struct TowerRuntime {
@@ -149,6 +183,7 @@ struct TowerRuntime {
     float slowFactor = 1.0f;
     int slowTicks = 0;
     float angle = 0.0f;
+    float targetAngle = 0.0f;  // desired facing; angle eases toward this each tick
     float flash = 0.0f;
     float recoil = 0.0f;
     float beamTargetX = 0.0f;
@@ -182,6 +217,12 @@ struct ProjectileRuntime {
     int lifetime = 60;
     int trailCooldown = 0;
     int targetEnemyId = -1;
+    // Motion model + ballistic-arc bookkeeping. Defaults keep legacy rockets homing.
+    ProjectileMotion motion = ProjectileMotion::Homing;
+    float groundX = 0.0f;     // ballistic impact point captured at launch
+    float groundY = 0.0f;
+    float launchDist = 0.0f;  // spawn->ground distance, for arc progress
+    float arcHeight = 0.0f;   // peak visual lift (px) for ballistic shells
     bool alive = true;
 };
 

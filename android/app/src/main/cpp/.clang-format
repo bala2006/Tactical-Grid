@@ -1,0 +1,19 @@
+# Code style for the native C++ engine. Matches the existing 4-space, 100-col,
+# Allman-free style already used across engine/ so `clang-format` is a no-op on
+# clean code and only flags drift.
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++17
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+AccessModifierOffset: -4
+PointerAlignment: Right
+DerivePointerAlignment: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Attach
+SortIncludes: false
+SpaceAfterCStyleCast: false

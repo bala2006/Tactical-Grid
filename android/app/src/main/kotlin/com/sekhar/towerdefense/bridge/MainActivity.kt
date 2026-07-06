@@ -10,6 +10,8 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private var sfxChannel: SfxChannel? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         flutterEngine
@@ -19,6 +21,10 @@ class MainActivity : FlutterActivity() {
                 "towerdefense/native_board",
                 GameBoardPlatformViewFactory(),
             )
+        sfxChannel = SfxChannel(
+            applicationContext,
+            flutterEngine.dartExecutor.binaryMessenger,
+        )
     }
 
     override fun onResume() {
@@ -29,5 +35,11 @@ class MainActivity : FlutterActivity() {
     override fun onPause() {
         NativeBridge.nativeOnPause()
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        sfxChannel?.dispose()
+        sfxChannel = null
+        super.onDestroy()
     }
 }

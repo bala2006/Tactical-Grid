@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../game/domain/content.dart';
 import '../../../game/domain/models.dart';
+import '../game_theme.dart';
 import 'screen_chrome.dart';
 
 class MapSelectorScreen extends StatelessWidget {
@@ -20,129 +21,170 @@ class MapSelectorScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return TacticalBackground(
       key: const ValueKey<String>('map'),
-      decoration: screenBackgroundDecoration(),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: DecoratedBox(
-          decoration: solidScreenCardDecoration(),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(GameSpace.md),
+          child: GlassPanel(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    IconButton.outlined(
-                      onPressed: onBack,
-                      icon: const Icon(Icons.arrow_back_rounded),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            'TACTICAL GRID',
-                            style: TextStyle(
-                              color: Color(0xFF8EB8D7),
-                              fontSize: 10,
-                              letterSpacing: 2.4,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            'Select Map',
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF79B9FF),
-                        foregroundColor: const Color(0xFF072033),
-                        textStyle: const TextStyle(fontWeight: FontWeight.w800),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                      ),
-                      onPressed: onStartRun,
-                      child: const Text('Start Run'),
-                    ),
-                  ],
+                ScreenHeader(
+                  eyebrow: 'ENDLESS MODE',
+                  title: 'Select Battlefield',
+                  onBack: onBack,
+                  trailing: TacticalButton(
+                    label: 'Start Run',
+                    icon: Icons.play_arrow_rounded,
+                    variant: TacticalButtonVariant.primary,
+                    expand: false,
+                    onPressed: onStartRun,
+                  ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 14,
                     vertical: 10,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF16344D),
-                    borderRadius: BorderRadius.circular(18),
+                    color: GameColors.panelStrong,
+                    borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+                    border: Border.all(color: GameColors.border),
                   ),
-                  child: const Text(
-                    'Choose the battlefield. Difficulty, wave mode, audio, effects, and map utilities are available on the Settings screen.',
-                    style: TextStyle(
-                      color: Color(0xFF8FAAC0),
-                      fontSize: 12,
-                      height: 1.35,
-                    ),
+                  child: const Row(
+                    children: <Widget>[
+                      Icon(
+                        Icons.all_inclusive_rounded,
+                        color: GameColors.accentBright,
+                        size: 18,
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Survive as long as you can. Difficulty, wave mode, and '
+                          'audio are tuned on the Settings screen.',
+                          style: TextStyle(
+                            color: GameColors.muted,
+                            fontSize: 11.5,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 14),
                 Expanded(
                   child: SingleChildScrollView(
                     child: Wrap(
                       spacing: 10,
                       runSpacing: 10,
-                      children: selectableMapNames
-                          .map((String name) {
-                            final bool selected = config.mapSelection == name;
-                            return SizedBox(
-                              width: 160,
-                              child: FilledButton(
-                                onPressed: () => onSelectMap(name),
-                                style: FilledButton.styleFrom(
-                                  elevation: 0,
-                                  backgroundColor: selected
-                                      ? const Color(0xFF79B9FF)
-                                      : const Color(0xFF1A3E5B),
-                                  foregroundColor: selected
-                                      ? const Color(0xFF072033)
-                                      : Colors.white,
-                                  padding: const EdgeInsets.all(14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(18),
-                                    side: BorderSide(
-                                      color: selected
-                                          ? const Color(0xFF9CCEFF)
-                                          : const Color(0xFF2A5474),
-                                    ),
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Text(
-                                      mapLabels[name] ?? name,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          })
-                          .toList(growable: false),
+                      children: selectableMapNames.map((String name) {
+                        final bool selected = config.mapSelection == name;
+                        return _MapTile(
+                          name: mapLabels[name] ?? name,
+                          procedural: proceduralMapNames.contains(name),
+                          selected: selected,
+                          onTap: () => onSelectMap(name),
+                        );
+                      }).toList(growable: false),
                     ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MapTile extends StatelessWidget {
+  const _MapTile({
+    required this.name,
+    required this.procedural,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String name;
+  final bool procedural;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color accent = procedural ? GameColors.success : GameColors.accent;
+    return SizedBox(
+      width: 168,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+          child: Ink(
+            decoration: BoxDecoration(
+              gradient: selected
+                  ? GameGradients.accent(GameColors.accent)
+                  : LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: <Color>[
+                        accent.withValues(alpha: 0.08),
+                        GameColors.panel,
+                      ],
+                    ),
+              borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+              border: Border.all(
+                color: selected
+                    ? GameColors.accentBright
+                    : accent.withValues(alpha: 0.32),
+                width: selected ? 1.6 : 1,
+              ),
+            ),
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.map_rounded,
+                      size: 16,
+                      color: selected ? const Color(0xFF04121F) : accent,
+                    ),
+                    const Spacer(),
+                    if (selected)
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        size: 16,
+                        color: Color(0xFF04121F),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  name,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    color: selected ? const Color(0xFF04121F) : GameColors.text,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  procedural ? 'PROCEDURAL' : 'AUTHORED',
+                  style: TextStyle(
+                    fontSize: 8.5,
+                    letterSpacing: 1.2,
+                    fontWeight: FontWeight.w700,
+                    color: selected
+                        ? const Color(0xCC04121F)
+                        : accent.withValues(alpha: 0.9),
                   ),
                 ),
               ],

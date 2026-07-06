@@ -1,4 +1,4 @@
-name: tactical-grid
+name: towerdefense
 description: "Tactical-Grid - A Tower Defense Game built with Flutter and Flame engine"
 publish_to: 'https://github.com/bala2006/Tactical-Grid'
 homepage: https://github.com/bala2006/Tactical-Grid
@@ -17,6 +17,7 @@ dependencies:
   ffi: ^2.1.4
   flame: ^1.34.0
   flame_audio: ^2.11.12
+  audioplayers: ^6.6.0
   path_provider: ^2.1.5
   url_launcher: ^6.3.2
 

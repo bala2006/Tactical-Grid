@@ -24,6 +24,12 @@ enum TowerKind {
   clusterBomb,
   tesla,
   plasma,
+  gatling,
+  vulcanCiws,
+  mortar,
+  siegeHowitzer,
+  interceptor,
+  aegisBattery,
 }
 
 enum EnemyKind {
@@ -700,6 +706,9 @@ class AppUiState {
     required this.healthBarsEnabled,
     required this.defeat,
     required this.performance,
+    this.victory = false,
+    this.stars = 0,
+    this.totalWaves = 0,
   });
 
   final int wave;
@@ -720,6 +729,11 @@ class AppUiState {
   final bool healthBarsEnabled;
   final bool defeat;
   final PerformanceStats performance;
+
+  /// Remaster: finite campaign-level outcome.
+  final bool victory;
+  final int stars;
+  final int totalWaves;
 }
 
 class MapDefinition {

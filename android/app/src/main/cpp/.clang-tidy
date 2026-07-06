@@ -1,0 +1,15 @@
+# Static-analysis checks for the native engine. Focused on correctness, performance
+# and modern C++; noisy/opinionated checks are disabled to keep signal high.
+Checks: >
+  bugprone-*,
+  performance-*,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-using,
+  readability-braces-around-statements,
+  readability-redundant-member-init,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions
+WarningsAsErrors: ''
+HeaderFilterRegex: 'engine/.*'
+FormatStyle: file

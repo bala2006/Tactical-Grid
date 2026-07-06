@@ -1,56 +1,129 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../../progression/domain/campaign.dart';
+import '../../../progression/domain/profile.dart';
+import '../game_theme.dart';
 import 'screen_chrome.dart';
 
+/// Local records board, backed by the persisted [PlayerProfile]. Shows lifetime
+/// stats: best wave, fastest clear, total kills, stars and campaign progress.
 class LeaderboardScreen extends StatelessWidget {
-  const LeaderboardScreen({required this.onBack, super.key});
+  const LeaderboardScreen({
+    required this.onBack,
+    required this.profileListenable,
+    super.key,
+  });
 
   final VoidCallback onBack;
+  final ValueListenable<PlayerProfile> profileListenable;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return TacticalBackground(
       key: const ValueKey<String>('leaderboard'),
-      decoration: screenBackgroundDecoration(),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
+      child: SafeArea(
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: DecoratedBox(
-              decoration: solidScreenCardDecoration(),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    Row(
+            constraints: const BoxConstraints(maxWidth: 820),
+            child: Padding(
+              padding: const EdgeInsets.all(GameSpace.md),
+              child: ValueListenableBuilder<PlayerProfile>(
+                valueListenable: profileListenable,
+                builder: (BuildContext context, PlayerProfile profile, _) {
+                  return GlassPanel(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: <Widget>[
-                        IconButton.outlined(
-                          onPressed: onBack,
-                          icon: const Icon(Icons.arrow_back_rounded),
+                        ScreenHeader(
+                          eyebrow: 'SERVICE RECORD',
+                          title: 'Records',
+                          onBack: onBack,
                         ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(height: 14),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: <Widget>[
+                            _RecordTile(
+                              icon: Icons.waves_rounded,
+                              color: GameColors.accentBright,
+                              label: 'Best wave reached',
+                              value: profile.bestWaveReached == 0
+                                  ? '—'
+                                  : '${profile.bestWaveReached}',
+                            ),
+                            _RecordTile(
+                              icon: Icons.timer_rounded,
+                              color: GameColors.success,
+                              label: 'Fastest level clear',
+                              value: profile.fastestClearSeconds == null
+                                  ? '—'
+                                  : _formatDuration(
+                                      profile.fastestClearSeconds!,
+                                    ),
+                            ),
+                            _RecordTile(
+                              icon: Icons.track_changes_rounded,
+                              color: GameColors.warning,
+                              label: 'Total kills',
+                              value: '${profile.totalKills}',
+                            ),
+                            _RecordTile(
+                              icon: Icons.star_rounded,
+                              color: GameColors.gold,
+                              label: 'Stars earned',
+                              value:
+                                  '${profile.totalStars}/${Campaign.levelCount * 3}',
+                            ),
+                            _RecordTile(
+                              icon: Icons.flag_rounded,
+                              color: GameColors.accent,
+                              label: 'Levels cleared',
+                              value:
+                                  '${profile.levelsCleared}/${Campaign.levelCount}',
+                            ),
+                            _RecordTile(
+                              icon: Icons.diamond_rounded,
+                              color: GameColors.crystal,
+                              label: 'Crystals',
+                              value: '${profile.crystals}',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: GameColors.panelStrong,
+                            borderRadius:
+                                BorderRadius.circular(GameSpace.radiusMd),
+                            border: Border.all(color: GameColors.border),
+                          ),
+                          child: Row(
                             children: <Widget>[
-                              Text(
-                                'TACTICAL GRID',
-                                style: TextStyle(
-                                  color: Color(0xFF8EB8D7),
-                                  fontSize: 10,
-                                  letterSpacing: 2.4,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                              Icon(
+                                profile.isCampaignComplete
+                                    ? Icons.workspace_premium_rounded
+                                    : Icons.insights_rounded,
+                                color: profile.isCampaignComplete
+                                    ? GameColors.gold
+                                    : GameColors.accentBright,
+                                size: 20,
                               ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Leaderboard',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w800,
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  profile.isCampaignComplete
+                                      ? 'Campaign complete. Replay levels to perfect your star rating.'
+                                      : 'Clear campaign levels and survive longer to raise these records.',
+                                  style: const TextStyle(
+                                    color: GameColors.muted,
+                                    fontSize: 12,
+                                    height: 1.4,
+                                  ),
                                 ),
                               ),
                             ],
@@ -58,41 +131,91 @@ class LeaderboardScreen extends StatelessWidget {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF16344D),
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            'No leaderboard service is connected yet.',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'When scores are wired up, this screen can show best wave, fastest clear, and total kills.',
-                            style: TextStyle(
-                              color: Color(0xFF8FAAC0),
-                              fontSize: 13,
-                              height: 1.4,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  static String _formatDuration(int seconds) {
+    final int m = seconds ~/ 60;
+    final int s = seconds % 60;
+    if (m == 0) {
+      return '${s}s';
+    }
+    return '${m}m ${s.toString().padLeft(2, '0')}s';
+  }
+}
+
+class _RecordTile extends StatelessWidget {
+  const _RecordTile({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 232,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[color.withValues(alpha: 0.10), GameColors.panel],
+        ),
+        borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+            ),
+            child: Icon(icon, color: color, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label.toUpperCase(),
+                  style: const TextStyle(
+                    color: GameColors.muted,
+                    fontSize: 8.5,
+                    letterSpacing: 0.8,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

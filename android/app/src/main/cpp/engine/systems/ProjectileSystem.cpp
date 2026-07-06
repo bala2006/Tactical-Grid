@@ -130,6 +130,38 @@ std::vector<ProjectileImpact> advanceProjectiles(
         projectile.prevX = projectile.x;
         projectile.prevY = projectile.y;
 
+        // Ballistic shells (mortar/howitzer) fly a fixed arc to a ground point and
+        // detonate on arrival regardless of whether the original target survives.
+        if (projectile.motion == ProjectileMotion::Ballistic) {
+            const float dxg = projectile.groundX - projectile.x;
+            const float dyg = projectile.groundY - projectile.y;
+            const float distGroundSquared = dxg * dxg + dyg * dyg;
+            if (projectile.lifetime <= 0 || distGroundSquared <= hitDistanceSquared) {
+                impacts.push_back(ProjectileImpact{
+                    projectile.x,
+                    projectile.y,
+                    projectile.splashRadius,
+                    projectile.damageMin,
+                    projectile.damageMax,
+                    static_cast<int>(index),
+                    projectile.targetEnemyId,
+                });
+                projectile.alive = false;
+                continue;
+            }
+            if (std::abs(projectile.vx) < 0.0001f && std::abs(projectile.vy) < 0.0001f) {
+                const float d = std::sqrt(distGroundSquared);
+                if (d > 0.0001f) {
+                    projectile.vx = dxg / d * projectile.topSpeed;
+                    projectile.vy = dyg / d * projectile.topSpeed;
+                }
+            }
+            projectile.x += projectile.vx;
+            projectile.y += projectile.vy;
+            projectile.lifetime--;
+            continue;
+        }
+
         const int retargetedId = retargetRocketByEnemyId(
             projectile,
             enemies,
@@ -184,8 +216,21 @@ std::vector<ProjectileImpact> advanceProjectiles(
 
         const float distance = std::sqrt(distanceSquared);
         if (distance > 0.0001f) {
-            const float desiredX = (dx / distance) * projectile.topSpeed;
-            const float desiredY = (dy / distance) * projectile.topSpeed;
+            // Interceptors lead the target's motion to run it down; plain homing
+            // missiles steer toward its current position.
+            float aimX = target.x;
+            float aimY = target.y;
+            if (projectile.motion == ProjectileMotion::Interceptor) {
+                aimX += target.vx * 8.0f;
+                aimY += target.vy * 8.0f;
+            }
+            const float aimDx = aimX - projectile.x;
+            const float aimDy = aimY - projectile.y;
+            const float aimLength = std::sqrt(aimDx * aimDx + aimDy * aimDy);
+            const float dirX = aimLength > 0.0001f ? aimDx / aimLength : dx / distance;
+            const float dirY = aimLength > 0.0001f ? aimDy / aimLength : dy / distance;
+            const float desiredX = dirX * projectile.topSpeed;
+            const float desiredY = dirY * projectile.topSpeed;
             float steerX = desiredX - projectile.vx;
             float steerY = desiredY - projectile.vy;
             const float steerLength = std::sqrt(steerX * steerX + steerY * steerY);

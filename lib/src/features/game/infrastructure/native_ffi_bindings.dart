@@ -86,21 +86,32 @@ final class NativeFfiBindings {
 
   NativeGameSnapshotStruct readSnapshot() => _snapshotPointer().ref;
 
+  // Reused scratch buffer for draining audio events. Allocated once and kept for
+  // the process lifetime so the 60 Hz drain loop does not calloc/free every poll
+  // (that per-poll native allocation was a primary driver of GC churn).
+  ffi.Pointer<NativeAudioEventStruct>? _audioBuffer;
+  int _audioBufferCapacity = 0;
+
   List<NativeAudioEvent> drainAudioEvents([int maxEvents = 16]) {
-    final ffi.Pointer<NativeAudioEventStruct> buffer =
-        calloc<NativeAudioEventStruct>(maxEvents);
-    try {
-      final int count = _consumeAudioEvents(buffer, maxEvents);
-      return List<NativeAudioEvent>.generate(count, (int index) {
-        final NativeAudioEventStruct event = buffer[index];
-        return NativeAudioEvent(
-          soundId: NativeSoundId.fromValue(event.soundId),
-          volume: event.volume,
-        );
-      }, growable: false);
-    } finally {
-      calloc.free(buffer);
+    if (_audioBuffer == null || _audioBufferCapacity < maxEvents) {
+      if (_audioBuffer != null) {
+        calloc.free(_audioBuffer!);
+      }
+      _audioBuffer = calloc<NativeAudioEventStruct>(maxEvents);
+      _audioBufferCapacity = maxEvents;
     }
+    final ffi.Pointer<NativeAudioEventStruct> buffer = _audioBuffer!;
+    final int count = _consumeAudioEvents(buffer, maxEvents);
+    if (count <= 0) {
+      return const <NativeAudioEvent>[];
+    }
+    return List<NativeAudioEvent>.generate(count, (int index) {
+      final NativeAudioEventStruct event = buffer[index];
+      return NativeAudioEvent(
+        soundId: NativeSoundId.fromValue(event.soundId),
+        volume: event.volume,
+      );
+    }, growable: false);
   }
 
   void setActiveScreen(int screenId) {
@@ -350,6 +361,16 @@ final class NativeGameSnapshotStruct extends ffi.Struct {
 
   @ffi.Array.multi([_mapIdCapacity])
   external ffi.Array<ffi.Uint8> exportMap;
+
+  // Remaster (appended to match NativeInterop.h; preserves existing offsets):
+  @ffi.Uint8()
+  external int victoryVisible;
+
+  @ffi.Int32()
+  external int stars;
+
+  @ffi.Int32()
+  external int totalWaves;
 }
 
 String readNativeString(ffi.Array<ffi.Uint8> buffer, int capacity) {

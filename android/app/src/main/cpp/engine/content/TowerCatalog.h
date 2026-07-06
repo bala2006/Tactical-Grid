@@ -25,13 +25,16 @@ struct TowerCatalogEntry {
     std::string_view targetingText;
     TowerKindId nextUpgradeKind = TowerKindId::Unknown;
     std::string_view nextUpgradeKindId;
+    // When true the tower is intentionally damage-free (utility/status only) and is
+    // exempt from the "no zero-damage tower" content invariant in validateContent().
+    bool statusOnly = false;
 };
 
 const TowerCatalogEntry *findTowerCatalogEntry(std::string_view kindId);
 const TowerCatalogEntry *findTowerCatalogEntry(TowerKindId kindId);
 const TowerCatalogEntry *findNextTowerUpgrade(std::string_view kindId);
 const TowerCatalogEntry *findNextTowerUpgrade(TowerKindId kindId);
-const std::array<TowerCatalogEntry, 14> &towerCatalogEntries();
+const std::array<TowerCatalogEntry, 20> &towerCatalogEntries();
 
 }  // namespace towerdefense
 

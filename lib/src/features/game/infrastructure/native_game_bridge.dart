@@ -37,6 +37,14 @@ class NativeGameBridge {
   Timer? _snapshotTimer;
   NativeGameSnapshot? _latestSnapshot;
 
+  // Change-detection for the HUD emit. The native board renders independently at
+  // 60 fps; the Dart snapshot only feeds HUD/overlays, so we skip rebuilding the
+  // DTO tree (and waking the UI) when nothing user-visible changed. A periodic
+  // safety re-emit keeps the FPS/perf overlay and any non-signature field fresh.
+  int _lastSignature = 0;
+  int _lastEmitMs = 0;
+  static const int _maxQuietMs = 200;
+
   Stream<NativeGameSnapshot> snapshots() {
     _snapshotController ??= StreamController<NativeGameSnapshot>.broadcast(
       onListen: _startPolling,
@@ -46,7 +54,7 @@ class NativeGameBridge {
   }
 
   Future<void> initialize() async {
-    _emitSnapshot();
+    _emitSnapshot(force: true);
     _startPolling();
   }
 
@@ -60,7 +68,7 @@ class NativeGameBridge {
 
   Future<void> setScreen(String screenId) async {
     _bindings.setActiveScreen(_screenNameToId(screenId));
-    _emitSnapshot();
+    _emitSnapshot(force: true);
   }
 
   Future<void> restart() async => _invoke('restart');
@@ -79,6 +87,17 @@ class NativeGameBridge {
       _invoke('selectTower', towerId);
 
   Future<void> setMap(String mapId) async => _invoke('setMap', mapId);
+
+  /// Loads a finite campaign level. Payload: `mapId|difficulty|totalWaves|waveMode`.
+  Future<void> setLevel({
+    required String mapId,
+    required Difficulty difficulty,
+    required int totalWaves,
+    WaveMode waveMode = WaveMode.preset,
+  }) async => _invoke(
+    'setLevel',
+    '$mapId|${difficulty.index}|$totalWaves|${waveMode.index}',
+  );
 
   Future<void> setDifficulty(Difficulty difficulty) async =>
       _invoke('setDifficulty', difficulty.index.toString());
@@ -111,16 +130,78 @@ class NativeGameBridge {
 
   bool _invoke(String actionId, [String payload = '']) {
     final bool result = _bindings.invokeAction(actionId, payload);
-    _emitSnapshot();
+    // User actions always force a fresh emit so taps/selection feel instant.
+    _emitSnapshot(force: true);
     return result;
   }
 
-  void _emitSnapshot() {
-    final NativeGameSnapshot next = NativeGameSnapshot.fromStruct(
-      _bindings.readSnapshot(),
-    );
+  void _emitSnapshot({bool force = false}) {
+    final NativeGameSnapshotStruct ref = _bindings.readSnapshot();
+    final int nowMs = DateTime.now().millisecondsSinceEpoch;
+    final int signature = _hudSignature(ref);
+    if (!force &&
+        signature == _lastSignature &&
+        (nowMs - _lastEmitMs) < _maxQuietMs) {
+      return;
+    }
+    _lastSignature = signature;
+    _lastEmitMs = nowMs;
+    final NativeGameSnapshot next = NativeGameSnapshot.fromStruct(ref);
     _latestSnapshot = next;
     _snapshotController?.add(next);
+  }
+
+  // Cheap scalar-only signature of the fields that affect the HUD/overlays.
+  // Deliberately excludes tick, simTime and per-frame perf (fps/frameTime) so a
+  // steady board does not force 60 Hz rebuilds; string fields are covered by the
+  // scalars they travel with plus the _maxQuietMs safety re-emit.
+  int _hudSignature(NativeGameSnapshotStruct s) {
+    final NativeHudSnapshotStruct hud = s.hud;
+    final NativeSelectionSnapshotStruct sel = s.selection;
+    final NativePendingPlacementSnapshotStruct pend = s.pendingPlacement;
+    final NativeConfigSnapshotStruct cfg = s.config;
+    final NativeRunStatsSnapshotStruct rs = s.runStats;
+    int h = 17;
+    h = h * 31 + s.runId;
+    h = h * 31 + s.activeScreen;
+    h = h * 31 + s.defeatVisible;
+    h = h * 31 + s.victoryVisible;
+    h = h * 31 + s.stars;
+    h = h * 31 + s.totalWaves;
+    h = h * 31 + hud.health;
+    h = h * 31 + hud.maxHealth;
+    h = h * 31 + hud.cash;
+    h = h * 31 + hud.wave;
+    h = h * 31 + hud.kills;
+    h = h * 31 + hud.paused;
+    h = h * 31 + sel.present;
+    h = h * 31 + sel.titleColor;
+    h = h * 31 + sel.cost.hashCode;
+    h = h * 31 + sel.sellPrice.hashCode;
+    h = h * 31 + sel.hasUpgradePrice;
+    h = h * 31 + sel.upgradePrice.hashCode;
+    h = h * 31 + sel.canSell;
+    h = h * 31 + sel.canUpgrade;
+    h = h * 31 + pend.present;
+    h = h * 31 + pend.placementAllowed;
+    h = h * 31 + pend.placementAffordable;
+    h = h * 31 + pend.showPlaceAction;
+    h = h * 31 + pend.remainingTicks;
+    h = h * 31 + cfg.difficulty;
+    h = h * 31 + cfg.waveMode;
+    h = h * 31 + cfg.quality;
+    h = h * 31 + cfg.effects;
+    h = h * 31 + cfg.healthBars;
+    h = h * 31 + cfg.muted;
+    h = h * 31 + cfg.autoSend;
+    h = h * 31 + cfg.adaptiveQuality;
+    h = h * 31 + cfg.showFps;
+    h = h * 31 + cfg.godMode;
+    h = h * 31 + cfg.firingDisabled;
+    h = h * 31 + rs.built;
+    h = h * 31 + rs.kills;
+    h = h * 31 + rs.leaks;
+    return h & 0x3FFFFFFFFFFFFFFF;
   }
 }
 
@@ -139,6 +220,9 @@ class NativeGameSnapshot {
     required this.defeatSummary,
     required this.config,
     required this.exportMap,
+    required this.victoryVisible,
+    required this.stars,
+    required this.totalWaves,
   });
 
   factory NativeGameSnapshot.fromStruct(NativeGameSnapshotStruct value) {
@@ -165,6 +249,9 @@ class NativeGameSnapshot {
       ),
       config: NativeConfigState.fromStruct(value.config),
       exportMap: readNativeString(value.exportMap, _bridgeMapIdCapacity),
+      victoryVisible: value.victoryVisible != 0,
+      stars: value.stars,
+      totalWaves: value.totalWaves,
     );
   }
 
@@ -181,6 +268,9 @@ class NativeGameSnapshot {
   final String defeatSummary;
   final NativeConfigState config;
   final String? exportMap;
+  final bool victoryVisible;
+  final int stars;
+  final int totalWaves;
 }
 
 class NativeHudState {
@@ -441,6 +531,10 @@ String _screenIdToName(int screenId) {
       return 'game';
     case 4:
       return 'leaderboard';
+    case 5:
+      return 'world';
+    case 6:
+      return 'shop';
     default:
       return 'home';
   }
@@ -456,6 +550,10 @@ int _screenNameToId(String value) {
       return 3;
     case 'leaderboard':
       return 4;
+    case 'world':
+      return 5;
+    case 'shop':
+      return 6;
     default:
       return 0;
   }

@@ -1,38 +1,35 @@
 import 'dart:async';
 
-import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 
 import '../../../game/application/controller.dart';
 import '../../../game/presentation/native_game_board.dart';
 import '../../../game/domain/models.dart';
-import '../../../game/rendering/tower_defense_flame_game.dart';
+import '../../../progression/application/progression_controller.dart';
+import '../../../progression/domain/campaign.dart';
+import '../../../progression/domain/objectives.dart';
 import '../game_theme.dart';
 import 'screen_chrome.dart';
 
 class GameScreen extends StatefulWidget {
   const GameScreen({
     required this.controller,
-    required this.game,
     required this.onBackToMap,
+    required this.onWorldMap,
     required this.onShowIntel,
-    required this.onShowDevPanel,
     super.key,
   });
 
   final GameController controller;
-  final TowerDefenseFlameGame game;
   final VoidCallback onBackToMap;
+  final VoidCallback onWorldMap;
   final VoidCallback onShowIntel;
-  final VoidCallback onShowDevPanel;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
 }
 
 class _GameScreenState extends State<GameScreen> {
-  Offset? _lastBoardPointer;
-
   Future<void> _showTimedTowerDialog({
     required AppUiState state,
     required bool enabled,
@@ -87,7 +84,7 @@ class _GameScreenState extends State<GameScreen> {
     await _showTimedTowerDialog(
       state: state,
       enabled: info.canUpgrade,
-      title: 'Upgrade Tower',
+      title: 'Upgrade Turret',
       confirmLabel: 'Upgrade',
       onConfirm: () async {
         widget.controller.upgradeSelectedTower();
@@ -104,32 +101,34 @@ class _GameScreenState extends State<GameScreen> {
               fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(height: 10),
-          Text(
-            'DMG ${info.damage}  -->  ${_extractUpgradeValue(compactDelta, 'DMG', info.damage)}',
-            style: const TextStyle(fontSize: 11),
+          const SizedBox(height: 12),
+          _UpgradeRow(
+            label: 'DMG',
+            from: info.damage,
+            to: _extractUpgradeValue(compactDelta, 'DMG', info.damage),
           ),
-          Text(
-            'RNG ${info.range.toStringAsFixed(1)}  -->  ${_extractUpgradeValue(compactDelta, 'RNG', info.range.toStringAsFixed(1))}',
-            style: const TextStyle(fontSize: 11),
-          ),
-          Text(
-            'CD ${info.cooldownSeconds.toStringAsFixed(2)}s  -->  ${_extractUpgradeValue(compactDelta, 'CD', '${info.cooldownSeconds.toStringAsFixed(2)}s')}',
-            style: const TextStyle(fontSize: 11),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            compactDelta,
-            style: const TextStyle(color: Color(0xFF9CCEFF), fontSize: 10),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Upgrade cost: \$${info.upgradePrice?.toStringAsFixed(0) ?? 'N/A'}',
-            style: const TextStyle(
-              color: Color(0xFF64FF8C),
-              fontWeight: FontWeight.w700,
-              fontSize: 12,
+          _UpgradeRow(
+            label: 'RNG',
+            from: info.range.toStringAsFixed(1),
+            to: _extractUpgradeValue(
+              compactDelta,
+              'RNG',
+              info.range.toStringAsFixed(1),
             ),
+          ),
+          _UpgradeRow(
+            label: 'CD',
+            from: '${info.cooldownSeconds.toStringAsFixed(2)}s',
+            to: _extractUpgradeValue(
+              compactDelta,
+              'CD',
+              '${info.cooldownSeconds.toStringAsFixed(2)}s',
+            ),
+          ),
+          const SizedBox(height: 12),
+          _CostRow(
+            label: 'Upgrade cost',
+            value: '\$${info.upgradePrice?.toStringAsFixed(0) ?? 'N/A'}',
           ),
         ],
       ),
@@ -144,7 +143,7 @@ class _GameScreenState extends State<GameScreen> {
     await _showTimedTowerDialog(
       state: state,
       enabled: info.canSell,
-      title: 'Sell Tower',
+      title: 'Sell Turret',
       confirmLabel: 'Sell',
       onConfirm: () async {
         widget.controller.sellSelectedTower();
@@ -157,23 +156,24 @@ class _GameScreenState extends State<GameScreen> {
             info.title,
             style: TextStyle(
               color: info.titleColor,
-              fontSize: 18,
+              fontSize: 16,
               fontWeight: FontWeight.w800,
             ),
           ),
           const SizedBox(height: 12),
-          Text('Total invested: \$${info.cost.toStringAsFixed(0)}'),
-          Text(
-            'Sell return: \$${info.sellPrice.toStringAsFixed(0)}',
-            style: const TextStyle(
-              color: Color(0xFF64FF8C),
-              fontWeight: FontWeight.w700,
-            ),
+          _CostRow(
+            label: 'Total invested',
+            value: '\$${info.cost.toStringAsFixed(0)}',
+            muted: true,
+          ),
+          _CostRow(
+            label: 'Sell return',
+            value: '\$${info.sellPrice.toStringAsFixed(0)}',
           ),
           const SizedBox(height: 8),
           const Text(
             'Selling refunds 75% of the total build + upgrade cost.',
-            style: TextStyle(color: Color(0xFF9CCEFF)),
+            style: TextStyle(color: GameColors.muted, fontSize: 11),
           ),
         ],
       ),
@@ -183,274 +183,247 @@ class _GameScreenState extends State<GameScreen> {
   @override
   Widget build(BuildContext context) {
     final Size screenSize = MediaQuery.sizeOf(context);
-    final double railWidth = (screenSize.width * 0.085).clamp(72.0, 88.0);
+    final double railWidth = (screenSize.width * 0.09).clamp(78.0, 98.0);
     return Container(
       key: const ValueKey<String>('game'),
-      color: GameColors.background,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(6, 6, 6, 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            SizedBox(
-              width: railWidth,
-              child: _TowerRail(
-                controller: widget.controller,
-                onBackToMap: widget.onBackToMap,
+      decoration: const BoxDecoration(gradient: GameGradients.screen),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              SizedBox(
+                width: railWidth,
+                child: _TowerRail(
+                  controller: widget.controller,
+                  onBackToMap: widget.onBackToMap,
+                ),
               ),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Column(
-                children: <Widget>[
-                  ValueListenableBuilder<AppUiState>(
-                    valueListenable: widget.controller.uiStateListenable,
-                    builder: (BuildContext context, AppUiState state, _) {
-                      return Row(
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  children: <Widget>[
+                    ValueListenableBuilder<AppUiState>(
+                      valueListenable: widget.controller.uiStateListenable,
+                      builder: (BuildContext context, AppUiState state, _) {
+                        return _TopBar(
+                          state: state,
+                          onUpgrade: state.selectionInfo?.canUpgrade == true
+                              ? () => _showUpgradeDialog(state)
+                              : null,
+                          onSell: state.selectionInfo?.canSell == true
+                              ? () => _showSellDialog(state)
+                              : null,
+                          onPause: widget.controller.togglePause,
+                          onIntel: widget.onShowIntel,
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: Stack(
                         children: <Widget>[
-                          Expanded(child: _HudBar(state: state)),
-                          const SizedBox(width: 6),
-                          _HeaderActionButton(
-                            icon: Icons.upgrade_rounded,
-                            label: 'Upgrade',
-                            onPressed: state.selectionInfo?.canUpgrade == true
-                                ? () => _showUpgradeDialog(state)
-                                : null,
-                          ),
-                          const SizedBox(width: 6),
-                          _HeaderActionButton(
-                            icon: Icons.sell_rounded,
-                            label: 'Sell',
-                            onPressed: state.selectionInfo?.canSell == true
-                                ? () => _showSellDialog(state)
-                                : null,
-                          ),
-                          const SizedBox(width: 6),
-                          _HeaderActionButton(
-                            icon: state.isPaused
-                                ? Icons.play_arrow_rounded
-                                : Icons.pause_rounded,
-                            label: state.isPaused ? 'Play' : 'Pause',
-                            onPressed: widget.controller.togglePause,
-                          ),
-                          const SizedBox(width: 6),
-                          _HeaderActionButton(
-                            icon: Icons.restart_alt_rounded,
-                            label: 'Restart',
-                            onPressed: () async {
-                              await widget.controller.restartGame();
-                            },
-                          ),
-                          const SizedBox(width: 6),
-                          _FloatingAction(
-                            icon: Icons.info_outline_rounded,
-                            onPressed: widget.onShowIntel,
-                          ),
-                          const SizedBox(width: 6),
-                          _FloatingAction(
-                            icon: Icons.settings_input_component_rounded,
-                            onPressed: widget.onShowDevPanel,
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 6),
-                  Expanded(
-                    child: Stack(
-                      children: <Widget>[
-                        Positioned.fill(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(18),
-                            child: ColoredBox(
-                              color: GameColors.background,
-                              child: widget.controller.isNativeBoardEnabled
-                                  ? const NativeGameBoard()
-                                  : GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onTapUp: (TapUpDetails details) {
-                                        widget.controller.handleBoardTap(
-                                          details.localPosition,
-                                        );
-                                      },
-                                      onPanStart: (DragStartDetails details) {
-                                        _lastBoardPointer =
-                                            details.localPosition;
-                                        widget.controller.updateBoardPointer(
-                                          details.localPosition,
-                                        );
-                                      },
-                                      onPanUpdate: (DragUpdateDetails details) {
-                                        _lastBoardPointer =
-                                            details.localPosition;
-                                        widget.controller.updateBoardPointer(
-                                          details.localPosition,
-                                        );
-                                      },
-                                      onPanEnd: (DragEndDetails details) {
-                                        final Offset? position =
-                                            _lastBoardPointer;
-                                        if (position != null) {
-                                          widget.controller.handleBoardTap(
-                                            position,
-                                          );
-                                        }
-                                      },
-                                      onPanCancel: () {
-                                        _lastBoardPointer = null;
-                                      },
-                                      child: RepaintBoundary(
-                                        child: GameWidget(game: widget.game),
-                                      ),
-                                    ),
+                          Positioned.fill(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(
+                                GameSpace.radiusLg,
+                              ),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: GameColors.borderStrong,
+                                  ),
+                                  borderRadius: BorderRadius.circular(
+                                    GameSpace.radiusLg,
+                                  ),
+                                ),
+                                child: const ColoredBox(
+                                  color: GameColors.background,
+                                  child: NativeGameBoard(),
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                        Positioned.fill(
-                          child: ValueListenableBuilder<AppUiState>(
-                            valueListenable:
-                                widget.controller.uiStateListenable,
-                            builder:
-                                (BuildContext context, AppUiState state, _) {
-                                  return Stack(
-                                    children: <Widget>[
-                                      if (widget
-                                          .controller
-                                          .isNativeBoardEnabled)
-                                        _NativePlacementOverlay(
-                                          state: state,
-                                          onCancel:
-                                              widget.controller.cancelPlacement,
-                                          onPlace: widget
-                                              .controller
-                                              .confirmPendingPlacement,
-                                        ),
-                                      if (state.performance.fps > 0 &&
-                                          widget
-                                              .controller
-                                              .config
-                                              .devFlags
-                                              .showFps)
-                                        Positioned(
-                                          left: 8,
-                                          top: 8,
-                                          child: _PerfChip(
-                                            stats: state.performance,
+                          Positioned.fill(
+                            child: ValueListenableBuilder<AppUiState>(
+                              valueListenable:
+                                  widget.controller.uiStateListenable,
+                              builder:
+                                  (BuildContext context, AppUiState state, _) {
+                                    return Stack(
+                                      children: <Widget>[
+                                        if (widget
+                                            .controller
+                                            .isNativeBoardEnabled)
+                                          _NativePlacementOverlay(
+                                            state: state,
+                                            onCancel: widget
+                                                .controller
+                                                .cancelPlacement,
+                                            onPlace: widget
+                                                .controller
+                                                .confirmPendingPlacement,
                                           ),
-                                        ),
-                                      if (state.defeat)
-                                        Positioned.fill(
-                                          child: ColoredBox(
-                                            color: Colors.black54,
-                                            child: Center(
-                                              child: _DefeatCard(
-                                                controller: widget.controller,
-                                                state: state,
-                                              ),
+                                        if (state.totalWaves > 0 &&
+                                            state.wave >= state.totalWaves &&
+                                            !state.defeat &&
+                                            !state.victory)
+                                          const Positioned(
+                                            top: 10,
+                                            left: 0,
+                                            right: 0,
+                                            child: Center(child: _BossBanner()),
+                                          ),
+                                        if (state.defeat)
+                                          _OverlayScrim(
+                                            child: _DefeatCard(
+                                              controller: widget.controller,
+                                              state: state,
                                             ),
                                           ),
-                                        ),
-                                    ],
-                                  );
-                                },
+                                        if (state.victory)
+                                          _OverlayScrim(
+                                            child: _VictoryCard(
+                                              controller: widget.controller,
+                                              state: state,
+                                              onWorldMap: widget.onWorldMap,
+                                            ),
+                                          ),
+                                      ],
+                                    );
+                                  },
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _HudMetric {
-  const _HudMetric({
-    required this.icon,
-    required this.value,
-    required this.color,
-  });
-  final IconData icon;
-  final String value;
-  final Color color;
-}
-
-class _HudBar extends StatelessWidget {
-  const _HudBar({required this.state});
-  final AppUiState state;
+class _OverlayScrim extends StatelessWidget {
+  const _OverlayScrim({required this.child});
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    final List<_HudMetric> metrics = <_HudMetric>[
-      _HudMetric(
-        icon: Icons.favorite_rounded,
-        value: '${state.health}/${state.maxHealth}',
-        color: const Color(0xFFFF7E79),
+    return Positioned.fill(
+      child: ColoredBox(
+        color: const Color(0xB3040810),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(14),
+            child: child,
+          ),
+        ),
       ),
-      _HudMetric(
-        icon: Icons.attach_money_rounded,
-        value: '\$${state.cash}',
-        color: const Color(0xFF64FF8C),
-      ),
-      _HudMetric(
-        icon: Icons.waves_rounded,
-        value: '${state.wave}',
-        color: const Color(0xFF79D8FF),
-      ),
-      _HudMetric(
-        icon: Icons.track_changes_rounded,
-        value: '${state.runStats.kills}',
-        color: const Color(0xFFB5FF82),
-      ),
-    ];
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Top HUD bar
+// ---------------------------------------------------------------------------
+
+class _TopBar extends StatelessWidget {
+  const _TopBar({
+    required this.state,
+    required this.onUpgrade,
+    required this.onSell,
+    required this.onPause,
+    required this.onIntel,
+  });
+
+  final AppUiState state;
+  final VoidCallback? onUpgrade;
+  final VoidCallback? onSell;
+  final VoidCallback onPause;
+  final VoidCallback onIntel;
+
+  @override
+  Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFF11293F),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF2A5474)),
+        gradient: GameGradients.panel,
+        borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+        border: Border.all(color: GameColors.borderStrong),
         boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x66000000),
-            blurRadius: 18,
-            offset: Offset(0, 10),
-          ),
+          BoxShadow(color: Color(0x66000000), blurRadius: 16, offset: Offset(0, 8)),
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         child: Row(
           children: <Widget>[
             Expanded(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
-                  children: metrics
-                      .map(
-                        (_HudMetric metric) => _HudMetricView(metric: metric),
-                      )
-                      .toList(growable: false),
+                  children: <Widget>[
+                    _HealthReadout(
+                      health: state.health,
+                      maxHealth: state.maxHealth,
+                    ),
+                    const _Sep(),
+                    _StatReadout(
+                      icon: Icons.attach_money_rounded,
+                      color: GameColors.cash,
+                      value: '${state.cash}',
+                    ),
+                    const _Sep(),
+                    _StatReadout(
+                      icon: Icons.waves_rounded,
+                      color: GameColors.accentBright,
+                      value: state.totalWaves > 0
+                          ? '${state.wave}/${state.totalWaves}'
+                          : '${state.wave}',
+                    ),
+                    const _Sep(),
+                    _StatReadout(
+                      icon: Icons.track_changes_rounded,
+                      color: GameColors.success,
+                      value: '${state.runStats.kills}',
+                    ),
+                    const SizedBox(width: 10),
+                    _WaveStatePill(label: state.waveState),
+                  ],
                 ),
               ),
             ),
+            const SizedBox(width: 8),
+            _ActionButton(
+              icon: Icons.upgrade_rounded,
+              tint: GameColors.success,
+              onPressed: onUpgrade,
+            ),
             const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1C445F),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Text(
-                state.waveState,
-                style: const TextStyle(
-                  color: Color(0xFF9CCEFF),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
+            _ActionButton(
+              icon: Icons.sell_rounded,
+              tint: GameColors.warning,
+              onPressed: onSell,
+            ),
+            const SizedBox(width: 6),
+            _ActionButton(
+              icon: state.isPaused
+                  ? Icons.play_arrow_rounded
+                  : Icons.pause_rounded,
+              tint: GameColors.accentBright,
+              filled: true,
+              onPressed: onPause,
+            ),
+            const SizedBox(width: 6),
+            _ActionButton(
+              icon: Icons.info_outline_rounded,
+              tint: GameColors.muted,
+              onPressed: onIntel,
             ),
           ],
         ),
@@ -459,27 +432,161 @@ class _HudBar extends StatelessWidget {
   }
 }
 
-class _PerfChip extends StatelessWidget {
-  const _PerfChip({required this.stats});
+class _Sep extends StatelessWidget {
+  const _Sep();
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 16,
+      margin: const EdgeInsets.symmetric(horizontal: 9),
+      color: GameColors.border,
+    );
+  }
+}
 
-  final PerformanceStats stats;
+class _StatReadout extends StatelessWidget {
+  const _StatReadout({
+    required this.icon,
+    required this.color,
+    required this.value,
+  });
+  final IconData icon;
+  final Color color;
+  final String value;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 4),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HealthReadout extends StatelessWidget {
+  const _HealthReadout({required this.health, required this.maxHealth});
+  final int health;
+  final int maxHealth;
+
+  @override
+  Widget build(BuildContext context) {
+    final double frac = maxHealth <= 0
+        ? 0
+        : (health / maxHealth).clamp(0.0, 1.0);
+    final Color color = frac > 0.5
+        ? GameColors.health
+        : (frac > 0.25 ? GameColors.warning : GameColors.danger);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Icon(Icons.favorite_rounded, size: 14, color: color),
+        const SizedBox(width: 5),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              '$health/$maxHealth',
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 2),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: SizedBox(
+                width: 52,
+                height: 4,
+                child: LinearProgressIndicator(
+                  value: frac,
+                  backgroundColor: GameColors.panelStrong,
+                  valueColor: AlwaysStoppedAnimation<Color>(color),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _WaveStatePill extends StatelessWidget {
+  const _WaveStatePill({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: const Color(0xCC0B1D2E),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF2A5474)),
+        color: GameColors.accentSoft,
+        borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+        border: Border.all(color: GameColors.border),
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Text(
-          '${stats.fps.toStringAsFixed(0)} FPS  ${stats.frameTimeMs.toStringAsFixed(1)}ms  ${stats.quality.name}',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: GameColors.accentBright,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.tint,
+    required this.onPressed,
+    this.filled = false,
+  });
+
+  final IconData icon;
+  final Color tint;
+  final VoidCallback? onPressed;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool enabled = onPressed != null;
+    return Opacity(
+      opacity: enabled ? 1 : 0.4,
+      child: Material(
+        color: filled ? tint.withValues(alpha: 0.18) : GameColors.panelSoft,
+        borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+          child: Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+              border: Border.all(
+                color: enabled
+                    ? tint.withValues(alpha: 0.45)
+                    : GameColors.border,
+              ),
+            ),
+            child: Icon(icon, size: 17, color: enabled ? tint : GameColors.faint),
           ),
         ),
       ),
@@ -487,34 +594,9 @@ class _PerfChip extends StatelessWidget {
   }
 }
 
-class _HudMetricView extends StatelessWidget {
-  const _HudMetricView({required this.metric});
-  final _HudMetric metric;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Icon(metric.icon, size: 13, color: metric.color),
-          const SizedBox(width: 3),
-          Text(
-            metric.value,
-            style: TextStyle(
-              color: metric.color,
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(width: 1, height: 12, color: metric.color.withAlpha(120)),
-        ],
-      ),
-    );
-  }
-}
+// ---------------------------------------------------------------------------
+// Left tower rail / store
+// ---------------------------------------------------------------------------
 
 class _TowerRail extends StatelessWidget {
   const _TowerRail({required this.controller, required this.onBackToMap});
@@ -526,33 +608,47 @@ class _TowerRail extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        FilledButton(
-          onPressed: onBackToMap,
-          style: FilledButton.styleFrom(
-            elevation: 0,
-            backgroundColor: const Color(0xFF11293F),
-            foregroundColor: Colors.white,
-            minimumSize: const Size.fromHeight(40),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-              side: const BorderSide(color: Color(0xFF2A5474)),
-            ),
-          ),
-          child: const FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              '← Back',
-              maxLines: 1,
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+        Material(
+          color: GameColors.panelSoft,
+          borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+          child: InkWell(
+            onTap: onBackToMap,
+            borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+            child: Container(
+              height: 38,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+                border: Border.all(color: GameColors.borderStrong),
+              ),
+              child: const FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(Icons.arrow_back_rounded, size: 13),
+                    SizedBox(width: 4),
+                    Text(
+                      'EXIT',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 8),
         Expanded(
           child: DecoratedBox(
-            decoration: solidScreenCardDecoration().copyWith(
-              borderRadius: BorderRadius.circular(18),
+            decoration: BoxDecoration(
+              gradient: GameGradients.panel,
+              borderRadius: BorderRadius.circular(GameSpace.radiusLg),
+              border: Border.all(color: GameColors.borderStrong),
             ),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
@@ -560,31 +656,27 @@ class _TowerRail extends StatelessWidget {
                 children: <Widget>[
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF16344D),
-                      borderRadius: BorderRadius.circular(14),
+                      color: GameColors.panelStrong,
+                      borderRadius: BorderRadius.circular(GameSpace.radiusSm),
                     ),
                     child: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
                         Icon(
                           Icons.storefront_rounded,
-                          color: Color(0xFF9DE68A),
-                          size: 9,
+                          color: GameColors.success,
+                          size: 11,
                         ),
                         SizedBox(width: 4),
                         Text(
-                          'Store',
+                          'ARSENAL',
                           style: TextStyle(
-                            color: Color(0xFF8EB8D7),
+                            color: GameColors.muted,
                             fontSize: 8,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.2,
                           ),
                         ),
                       ],
@@ -595,9 +687,8 @@ class _TowerRail extends StatelessWidget {
                     child: ValueListenableBuilder<AppUiState>(
                       valueListenable: controller.uiStateListenable,
                       builder: (BuildContext context, AppUiState state, _) {
-                        final bool isPlacing = state.selectionStatus.startsWith(
-                          'Placing: ',
-                        );
+                        final bool isPlacing = state.selectionStatus
+                            .startsWith('Placing: ');
                         final String? selectedTitle = isPlacing
                             ? state.selectionInfo?.title
                             : null;
@@ -609,102 +700,12 @@ class _TowerRail extends StatelessWidget {
                           itemBuilder: (BuildContext context, int index) {
                             final TowerBlueprint blueprint =
                                 controller.storeBlueprints[index];
-                            final bool selected =
-                                selectedTitle == blueprint.title;
-                            final Color backgroundColor = selected
-                                ? const Color(0xFF234766)
-                                : const Color(0xFF1A3E5B);
-                            final Color foregroundColor = Colors.white;
-                            final Color priceChipColor = selected
-                                ? const Color(0xFF1D3C58)
-                                : const Color(0xFF16344D);
-                            final Color priceTextColor = selected
-                                ? const Color(0xFFA9D5FF)
-                                : const Color(0xFF8EB8D7);
-                            return FilledButton.tonal(
-                              onPressed: () async {
-                                await controller.selectBuildTower(
-                                  blueprint.kind,
-                                );
-                              },
-                              style: FilledButton.styleFrom(
-                                backgroundColor: backgroundColor,
-                                foregroundColor: foregroundColor,
-                                elevation: 0,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 5,
-                                  vertical: 8,
-                                ),
-                                minimumSize: const Size.fromHeight(64),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
-                                  side: BorderSide(
-                                    color: selected
-                                        ? const Color(0xFF79B9FF)
-                                        : const Color(0xFF2A5474),
-                                    width: selected ? 1.6 : 1,
-                                  ),
-                                ),
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: <Widget>[
-                                  AnimatedContainer(
-                                    duration: const Duration(milliseconds: 120),
-                                    width: 22,
-                                    height: 22,
-                                    decoration: BoxDecoration(
-                                      color: blueprint.color.withAlpha(
-                                        selected ? 230 : 190,
-                                      ),
-                                      shape: BoxShape.circle,
-                                      border: selected
-                                          ? Border.all(
-                                              color: const Color(0xFFAED7FF),
-                                              width: 1.4,
-                                            )
-                                          : null,
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Icon(
-                                      _towerIcon(blueprint.kind),
-                                      color: Colors.white,
-                                      size: 12,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    blueprint.title,
-                                    textAlign: TextAlign.center,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: foregroundColor,
-                                      fontSize: 8,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1.15,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 3),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 5,
-                                      vertical: 1.5,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: priceChipColor,
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Text(
-                                      '\$${blueprint.cost}',
-                                      style: TextStyle(
-                                        color: priceTextColor,
-                                        fontSize: 7.8,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                            return _TowerChip(
+                              blueprint: blueprint,
+                              selected: selectedTitle == blueprint.title,
+                              affordable: state.cash >= blueprint.cost,
+                              onTap: () => controller.selectBuildTower(
+                                blueprint.kind,
                               ),
                             );
                           },
@@ -722,60 +723,101 @@ class _TowerRail extends StatelessWidget {
   }
 }
 
-IconData _towerIcon(TowerKind kind) {
-  return switch (kind) {
-    TowerKind.gun || TowerKind.machineGun => Icons.radio_button_checked,
-    TowerKind.laser || TowerKind.beamEmitter => Icons.bolt_rounded,
-    TowerKind.slow || TowerKind.poison => Icons.ac_unit_rounded,
-    TowerKind.sniper || TowerKind.railgun => Icons.gps_fixed_rounded,
-    TowerKind.rocket || TowerKind.missileSilo => Icons.rocket_launch_rounded,
-    TowerKind.bomb || TowerKind.clusterBomb => Icons.blur_on_rounded,
-    TowerKind.tesla || TowerKind.plasma => Icons.offline_bolt_rounded,
-  };
-}
+class _TowerChip extends StatelessWidget {
+  const _TowerChip({
+    required this.blueprint,
+    required this.selected,
+    required this.affordable,
+    required this.onTap,
+  });
 
-class _DefeatCard extends StatelessWidget {
-  const _DefeatCard({required this.controller, required this.state});
-  final GameController controller;
-  final AppUiState state;
+  final TowerBlueprint blueprint;
+  final bool selected;
+  final bool affordable;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 360),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: <Color>[Color(0xF0122A45), Color(0xFF0E2137)],
+    final Color accent = GameColors.forDamageType(blueprint.damageType);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: selected
+                ? LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: <Color>[
+                      accent.withValues(alpha: 0.30),
+                      GameColors.panelSoft,
+                    ],
+                  )
+                : null,
+            color: selected ? null : GameColors.panelSoft,
+            borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+            border: Border.all(
+              color: selected ? accent : GameColors.border,
+              width: selected ? 1.6 : 1,
+            ),
           ),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: const Color(0x2E7A9CD2)),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              const Text(
-                'Run Compromised',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+              Container(
+                width: 26,
+                height: 26,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: selected ? 0.9 : 0.18),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: accent.withValues(alpha: selected ? 1 : 0.5),
+                    width: 1.2,
+                  ),
+                ),
+                child: Icon(
+                  towerKindIcon(blueprint.kind),
+                  color: selected ? const Color(0xFF04121F) : accent,
+                  size: 14,
+                ),
               ),
-              const SizedBox(height: 12),
-              Text('Reached wave ${state.wave}'),
-              Text('Towers built: ${state.runStats.built}'),
-              Text('Kills: ${state.runStats.kills}'),
-              Text('Damage dealt: ${state.runStats.totalDamage.round()}'),
-              Text('Leaks: ${state.runStats.leaks}'),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () async => controller.restartGame(),
-                child: const Text('Retry'),
+              const SizedBox(height: 4),
+              Text(
+                blueprint.title,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: GameColors.text,
+                  fontSize: 8,
+                  fontWeight: FontWeight.w700,
+                  height: 1.15,
+                ),
               ),
-              TextButton(
-                onPressed: () => controller.setActiveScreen('map'),
-                child: const Text('Back To Map Select'),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 1.5,
+                ),
+                decoration: BoxDecoration(
+                  color: affordable
+                      ? GameColors.cash.withValues(alpha: 0.16)
+                      : GameColors.danger.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '\$${blueprint.cost}',
+                  style: TextStyle(
+                    color: affordable ? GameColors.cash : GameColors.danger,
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ),
             ],
           ),
@@ -785,68 +827,708 @@ class _DefeatCard extends StatelessWidget {
   }
 }
 
-class _FloatingAction extends StatelessWidget {
-  const _FloatingAction({required this.icon, required this.onPressed});
-  final IconData icon;
-  final VoidCallback onPressed;
+String _extractUpgradeValue(String delta, String label, String fallback) {
+  final RegExpMatch? match = RegExp('$label\\s+([^,]+)').firstMatch(delta);
+  return match == null ? fallback : match.group(1)!.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Dialog content helpers
+// ---------------------------------------------------------------------------
+
+class _UpgradeRow extends StatelessWidget {
+  const _UpgradeRow({required this.label, required this.from, required this.to});
+  final String label;
+  final String from;
+  final String to;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 40,
-      child: FilledButton(
-        style: FilledButton.styleFrom(
-          elevation: 0,
-          backgroundColor: const Color(0xFF11293F),
-          foregroundColor: Colors.white,
-          minimumSize: const Size(40, 40),
-          padding: EdgeInsets.zero,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: const BorderSide(color: Color(0xFF2A5474)),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: <Widget>[
+          SizedBox(
+            width: 34,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: GameColors.muted,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
-        ),
-        onPressed: onPressed,
-        child: Icon(icon, size: 16),
+          Text(from, style: const TextStyle(fontSize: 11)),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 6),
+            child: Icon(
+              Icons.arrow_forward_rounded,
+              size: 12,
+              color: GameColors.accentBright,
+            ),
+          ),
+          Text(
+            to,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              color: GameColors.success,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _HeaderActionButton extends StatelessWidget {
-  const _HeaderActionButton({
-    required this.icon,
+class _CostRow extends StatelessWidget {
+  const _CostRow({
     required this.label,
-    required this.onPressed,
+    required this.value,
+    this.muted = false,
+  });
+  final String label;
+  final String value;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: <Widget>[
+          Text(
+            label,
+            style: const TextStyle(color: GameColors.muted, fontSize: 11),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              color: muted ? GameColors.text : GameColors.cash,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Defeat / victory cards
+// ---------------------------------------------------------------------------
+
+class _DefeatCard extends StatelessWidget {
+  const _DefeatCard({required this.controller, required this.state});
+  final GameController controller;
+  final AppUiState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 380),
+      child: GlassPanel(
+        glow: true,
+        borderColor: GameColors.danger.withValues(alpha: 0.6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: 56,
+              height: 56,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: GameColors.danger.withValues(alpha: 0.15),
+                border: Border.all(
+                  color: GameColors.danger.withValues(alpha: 0.6),
+                  width: 2,
+                ),
+              ),
+              child: const Icon(
+                Icons.gpp_bad_rounded,
+                color: GameColors.danger,
+                size: 30,
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'GRID OVERRUN',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.5,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _StatGrid(
+              entries: <MapEntry<String, String>>[
+                MapEntry('Wave', '${state.wave}'),
+                MapEntry('Towers', '${state.runStats.built}'),
+                MapEntry('Kills', '${state.runStats.kills}'),
+                MapEntry('Damage', '${state.runStats.totalDamage.round()}'),
+                MapEntry('Leaks', '${state.runStats.leaks}'),
+              ],
+            ),
+            const SizedBox(height: 16),
+            TacticalButton(
+              label: 'Retry',
+              icon: Icons.refresh_rounded,
+              variant: TacticalButtonVariant.primary,
+              onPressed: () async => controller.restartGame(),
+            ),
+            const SizedBox(height: 8),
+            TacticalButton(
+              label: controller.activeLevelId != null
+                  ? 'Theatre Map'
+                  : 'Battlefields',
+              icon: Icons.map_rounded,
+              variant: TacticalButtonVariant.ghost,
+              onPressed: () => controller.setActiveScreen(
+                controller.activeLevelId != null ? 'world' : 'map',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatGrid extends StatelessWidget {
+  const _StatGrid({required this.entries});
+  final List<MapEntry<String, String>> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.center,
+      children: <Widget>[
+        for (final MapEntry<String, String> e in entries)
+          Container(
+            width: 96,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: GameColors.panelStrong,
+              borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+              border: Border.all(color: GameColors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  e.value,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                Text(
+                  e.key.toUpperCase(),
+                  style: const TextStyle(
+                    color: GameColors.muted,
+                    fontSize: 8,
+                    letterSpacing: 1.0,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _VictoryCard extends StatelessWidget {
+  const _VictoryCard({
+    required this.controller,
+    required this.state,
+    required this.onWorldMap,
   });
 
-  final IconData icon;
+  final GameController controller;
+  final AppUiState state;
+  final VoidCallback onWorldMap;
+
+  @override
+  Widget build(BuildContext context) {
+    final LevelResult? result = controller.lastLevelResult;
+    final int stars = state.stars > 0 ? state.stars : (result?.stars ?? 1);
+    final String? levelId = controller.activeLevelId;
+    final CampaignLevel? current = levelId == null
+        ? null
+        : Campaign.levelById(levelId);
+    final CampaignLevel? next = levelId == null
+        ? null
+        : Campaign.nextLevel(levelId);
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 380),
+      child: GlassPanel(
+        glow: true,
+        borderColor: GameColors.success.withValues(alpha: 0.6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              'OBJECTIVE SECURED',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.2,
+                color: GameColors.success,
+              ),
+            ),
+            if (current != null) ...<Widget>[
+              const SizedBox(height: 2),
+              Text(
+                current.name,
+                style: const TextStyle(color: GameColors.muted, fontSize: 12),
+              ),
+            ],
+            const SizedBox(height: 12),
+            _AnimatedStars(stars: stars),
+            const SizedBox(height: 12),
+            if ((result?.crystalsAwarded ?? 0) > 0)
+              ResourceBadge(
+                icon: Icons.diamond_rounded,
+                color: GameColors.crystal,
+                label: '+${result!.crystalsAwarded} crystals',
+              )
+            else
+              const Text(
+                'No new crystals — beat your best for more',
+                style: TextStyle(color: GameColors.muted, fontSize: 11),
+              ),
+            const SizedBox(height: 10),
+            Text(
+              'Kills ${state.runStats.kills}   ·   Towers ${state.runStats.built}',
+              style: const TextStyle(fontSize: 11, color: GameColors.muted),
+            ),
+            if ((result?.newObjectives.isNotEmpty ?? false)) ...<Widget>[
+              const SizedBox(height: 10),
+              for (final BonusObjective objective in result!.newObjectives)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      const Icon(
+                        Icons.emoji_events_rounded,
+                        size: 15,
+                        color: GameColors.gold,
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          '${objective.label}  +${objective.crystalReward}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: GameColors.gold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+            const SizedBox(height: 14),
+            if (next != null)
+              TacticalButton(
+                label: 'Next: ${next.name}',
+                icon: Icons.arrow_forward_rounded,
+                variant: TacticalButtonVariant.primary,
+                onPressed: () async => controller.startCampaignLevel(next),
+              )
+            else
+              const Text(
+                'Campaign complete — well played, Commander.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: GameColors.success,
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: TacticalButton(
+                    label: 'Replay',
+                    icon: Icons.refresh_rounded,
+                    dense: true,
+                    onPressed: () async => controller.restartGame(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TacticalButton(
+                    label: 'Map',
+                    icon: Icons.map_rounded,
+                    dense: true,
+                    variant: TacticalButtonVariant.ghost,
+                    onPressed: onWorldMap,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AnimatedStars extends StatelessWidget {
+  const _AnimatedStars({required this.stars});
+  final int stars;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: <Widget>[
+        for (int i = 1; i <= 3; i++)
+          TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0, end: 1),
+            duration: Duration(milliseconds: 280 + i * 160),
+            curve: Curves.elasticOut,
+            builder: (BuildContext context, double t, Widget? child) {
+              return Transform.scale(
+                scale: i <= stars ? t : 1,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: Icon(
+                    i <= stars
+                        ? Icons.star_rounded
+                        : Icons.star_outline_rounded,
+                    size: 38,
+                    color: i <= stars ? GameColors.gold : GameColors.faint,
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+/// Top-of-board call-out shown while the final (boss) wave is active.
+class _BossBanner extends StatelessWidget {
+  const _BossBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0.6, end: 1),
+      duration: const Duration(milliseconds: 700),
+      curve: Curves.easeOut,
+      builder: (BuildContext context, double t, Widget? child) {
+        return Opacity(opacity: t, child: child);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: <Color>[Color(0xFF7A1E2B), Color(0xFFB23A2E)],
+          ),
+          borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+          border: Border.all(color: const Color(0x88FFD0C0)),
+          boxShadow: const <BoxShadow>[
+            BoxShadow(
+              color: Color(0x66000000),
+              blurRadius: 18,
+              offset: Offset(0, 8),
+            ),
+          ],
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              Icons.warning_amber_rounded,
+              size: 18,
+              color: Color(0xFFFFE0B2),
+            ),
+            SizedBox(width: 8),
+            Text(
+              'FINAL WAVE — HOLD THE LINE',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.4,
+                fontSize: 12,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Placement popup overlay
+// ---------------------------------------------------------------------------
+
+class _NativePlacementOverlay extends StatelessWidget {
+  const _NativePlacementOverlay({
+    required this.state,
+    required this.onCancel,
+    required this.onPlace,
+  });
+
+  final AppUiState state;
+  final VoidCallback onCancel;
+  final VoidCallback onPlace;
+
+  @override
+  Widget build(BuildContext context) {
+    final PendingPlacementInfo? pending = state.pendingPlacement;
+    if (pending == null || pending.id.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned.fill(
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          const double popupWidth = 176;
+          const double popupMinLeft = 8;
+          const double popupMinTop = 8;
+          const double popupBottomGap = 12;
+          const double estimatedPopupHeight = 78;
+
+          final double maxLeft = clampDoubleValue(
+            constraints.maxWidth - popupWidth - 8,
+            popupMinLeft,
+            constraints.maxWidth,
+          );
+          final double left = clampDoubleValue(
+            pending.anchorX - popupWidth / 2,
+            popupMinLeft,
+            maxLeft,
+          );
+          final double maxTop = clampDoubleValue(
+            constraints.maxHeight - estimatedPopupHeight - popupMinTop,
+            popupMinTop,
+            constraints.maxHeight,
+          );
+          final bool fitsAbove =
+              pending.anchorY - popupBottomGap - estimatedPopupHeight >=
+              popupMinTop;
+          final double preferredTop = fitsAbove
+              ? pending.anchorY - estimatedPopupHeight - popupBottomGap
+              : pending.anchorY + popupBottomGap;
+          final double top = clampDoubleValue(
+            preferredTop,
+            popupMinTop,
+            maxTop,
+          );
+
+          return Stack(
+            children: <Widget>[
+              Positioned(
+                left: left,
+                top: top,
+                child: _PlacementPopupCard(
+                  title: pending.title,
+                  cost: pending.cost,
+                  selectionStatus: state.selectionStatus,
+                  placementReason: pending.statusText.isEmpty
+                      ? state.selectionInfo?.placementReason ?? ''
+                      : pending.statusText,
+                  secondsLeft: pending.remainingTicks <= 0
+                      ? null
+                      : ((pending.remainingTicks + 59) ~/ 60),
+                  canPlace: pending.showPlaceAction,
+                  onCancel: onCancel,
+                  onPlace: onPlace,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PlacementPopupCard extends StatelessWidget {
+  const _PlacementPopupCard({
+    required this.title,
+    required this.cost,
+    required this.selectionStatus,
+    required this.placementReason,
+    required this.secondsLeft,
+    required this.canPlace,
+    required this.onCancel,
+    required this.onPlace,
+  });
+
+  final String title;
+  final double cost;
+  final String selectionStatus;
+  final String placementReason;
+  final int? secondsLeft;
+  final bool canPlace;
+  final VoidCallback onCancel;
+  final VoidCallback onPlace;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: GameGradients.panelStrong,
+        borderRadius: BorderRadius.circular(GameSpace.radiusMd),
+        border: Border.all(
+          color: canPlace ? GameColors.accent : GameColors.borderStrong,
+        ),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x88000000),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 132, maxWidth: 176),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Flexible(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: GameColors.text,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '\$${cost.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      color: GameColors.cash,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Text(
+                placementReason.isEmpty ? selectionStatus : placementReason,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: GameColors.muted,
+                  fontSize: 8.5,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  if (secondsLeft != null) ...<Widget>[
+                    Icon(
+                      Icons.timer_rounded,
+                      size: 10,
+                      color: GameColors.warning,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      '${secondsLeft}s',
+                      style: const TextStyle(
+                        color: GameColors.warning,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  _PopupActionButton(
+                    label: 'Cancel',
+                    foregroundColor: GameColors.muted,
+                    onPressed: onCancel,
+                  ),
+                  const SizedBox(width: 6),
+                  _PopupActionButton(
+                    label: 'Deploy',
+                    foregroundColor: const Color(0xFF04121F),
+                    backgroundColor: canPlace
+                        ? GameColors.accent
+                        : GameColors.faint,
+                    onPressed: canPlace ? onPlace : null,
+                    bold: true,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PopupActionButton extends StatelessWidget {
+  const _PopupActionButton({
+    required this.label,
+    required this.foregroundColor,
+    required this.onPressed,
+    this.backgroundColor = Colors.transparent,
+    this.bold = false,
+  });
+
   final String label;
+  final Color foregroundColor;
+  final Color backgroundColor;
+  final bool bold;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return FilledButton.icon(
-      style: FilledButton.styleFrom(
-        elevation: 0,
-        backgroundColor: const Color(0xFF11293F),
-        foregroundColor: Colors.white,
-        disabledBackgroundColor: const Color(0xFF11293F),
-        disabledForegroundColor: Colors.white38,
-        minimumSize: const Size(0, 40),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: const BorderSide(color: Color(0xFF2A5474)),
+    final TextStyle style = TextStyle(
+      color: foregroundColor,
+      fontSize: 9,
+      fontWeight: bold ? FontWeight.w800 : FontWeight.w700,
+    );
+    return Material(
+      color: backgroundColor,
+      borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(GameSpace.radiusSm),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          child: Text(label, style: style),
         ),
-        textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
       ),
-      onPressed: onPressed,
-      icon: Icon(icon, size: 14),
-      label: Text(label),
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Timed decision dialog (upgrade / sell)
+// ---------------------------------------------------------------------------
 
 class _TimedDecisionDialog extends StatefulWidget {
   const _TimedDecisionDialog({
@@ -898,8 +1580,11 @@ class _TimedDecisionDialogState extends State<_TimedDecisionDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF11293F),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      backgroundColor: GameColors.panel,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(GameSpace.radiusLg),
+        side: const BorderSide(color: GameColors.borderStrong),
+      ),
       title: Text(widget.title),
       content: SingleChildScrollView(
         child: Column(
@@ -907,10 +1592,23 @@ class _TimedDecisionDialogState extends State<_TimedDecisionDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             widget.content,
-            const SizedBox(height: 16),
-            Text(
-              'Decision timeout: ${_secondsLeft}s',
-              style: const TextStyle(color: Color(0xFFFFC16B), fontSize: 10),
+            const SizedBox(height: 14),
+            Row(
+              children: <Widget>[
+                const Icon(
+                  Icons.timer_rounded,
+                  size: 12,
+                  color: GameColors.warning,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Auto-resume in ${_secondsLeft}s',
+                  style: const TextStyle(
+                    color: GameColors.warning,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -936,251 +1634,6 @@ class _TimedDecisionDialogState extends State<_TimedDecisionDialog> {
           child: Text(widget.confirmLabel),
         ),
       ],
-    );
-  }
-}
-
-String _extractUpgradeValue(String delta, String label, String fallback) {
-  final RegExpMatch? match = RegExp('$label\\s+([^,]+)').firstMatch(delta);
-  return match == null ? fallback : match.group(1)!.trim();
-}
-
-class _NativePlacementOverlay extends StatelessWidget {
-  const _NativePlacementOverlay({
-    required this.state,
-    required this.onCancel,
-    required this.onPlace,
-  });
-
-  final AppUiState state;
-  final VoidCallback onCancel;
-  final VoidCallback onPlace;
-
-  @override
-  Widget build(BuildContext context) {
-    final PendingPlacementInfo? pending = state.pendingPlacement;
-    if (pending == null || pending.id.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Positioned.fill(
-      child: IgnorePointer(
-        ignoring: false,
-        child: LayoutBuilder(
-          builder: (BuildContext context, BoxConstraints constraints) {
-            const double popupWidth = 168;
-            const double popupMinLeft = 8;
-            const double popupMinTop = 8;
-            const double popupBottomGap = 12;
-            const double estimatedPopupHeight = 74;
-
-            double clampDouble(double value, double lower, double upper) {
-              return value.clamp(lower, upper).toDouble();
-            }
-
-            final double maxLeft = clampDouble(
-              constraints.maxWidth - popupWidth - 8,
-              popupMinLeft,
-              constraints.maxWidth,
-            );
-            final double left = clampDouble(
-              pending.anchorX - popupWidth / 2,
-              popupMinLeft,
-              maxLeft,
-            );
-            final double maxTop = clampDouble(
-              constraints.maxHeight - estimatedPopupHeight - popupMinTop,
-              popupMinTop,
-              constraints.maxHeight,
-            );
-            final bool fitsAbove =
-                pending.anchorY - popupBottomGap - estimatedPopupHeight >=
-                popupMinTop;
-            final double preferredTop = fitsAbove
-                ? pending.anchorY - estimatedPopupHeight - popupBottomGap
-                : pending.anchorY + popupBottomGap;
-            final double top = clampDouble(preferredTop, popupMinTop, maxTop);
-
-            return Stack(
-              children: <Widget>[
-                Positioned(
-                  left: left,
-                  top: top,
-                  child: _PlacementPopupCard(
-                    title: pending.title,
-                    cost: pending.cost,
-                    selectionStatus: state.selectionStatus,
-                    placementReason: pending.statusText.isEmpty
-                        ? state.selectionInfo?.placementReason ?? ''
-                        : pending.statusText,
-                    secondsLeft: pending.remainingTicks <= 0
-                        ? null
-                        : ((pending.remainingTicks + 59) ~/ 60),
-                    canPlace: pending.showPlaceAction,
-                    onCancel: onCancel,
-                    onPlace: onPlace,
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _PlacementPopupCard extends StatelessWidget {
-  const _PlacementPopupCard({
-    required this.title,
-    required this.cost,
-    required this.selectionStatus,
-    required this.placementReason,
-    required this.secondsLeft,
-    required this.canPlace,
-    required this.onCancel,
-    required this.onPlace,
-  });
-
-  final String title;
-  final double cost;
-  final String selectionStatus;
-  final String placementReason;
-  final int? secondsLeft;
-  final bool canPlace;
-  final VoidCallback onCancel;
-  final VoidCallback onPlace;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: const Color(0xF0122A45),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF2A5474)),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x66000000),
-            blurRadius: 16,
-            offset: Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 108),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Flexible(
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Color(0xFFF5F9FF),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    '\$${cost.toStringAsFixed(0)}',
-                    style: const TextStyle(
-                      color: Color(0xFF64FF8C),
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 2),
-              Text(
-                placementReason.isEmpty ? selectionStatus : placementReason,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF9CCEFF), fontSize: 8),
-              ),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  if (secondsLeft != null) ...<Widget>[
-                    Text(
-                      '${secondsLeft}s',
-                      style: const TextStyle(
-                        color: Color(0xFFFFC16B),
-                        fontSize: 8,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                  ],
-                  _PopupActionButton(
-                    label: 'Cancel',
-                    foregroundColor: const Color(0xFF9CCEFF),
-                    onPressed: onCancel,
-                  ),
-                  const SizedBox(width: 6),
-                  _PopupActionButton(
-                    label: 'Place',
-                    foregroundColor: const Color(0xFF072033),
-                    backgroundColor: canPlace
-                        ? const Color(0xFF79B9FF)
-                        : const Color(0xFF406782),
-                    onPressed: canPlace ? onPlace : null,
-                    bold: true,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PopupActionButton extends StatelessWidget {
-  const _PopupActionButton({
-    required this.label,
-    required this.foregroundColor,
-    required this.onPressed,
-    this.backgroundColor = Colors.transparent,
-    this.bold = false,
-  });
-
-  final String label;
-  final Color foregroundColor;
-  final Color backgroundColor;
-  final bool bold;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextStyle style = TextStyle(
-      color: foregroundColor,
-      fontSize: 8,
-      fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
-    );
-    return Material(
-      color: backgroundColor,
-      borderRadius: BorderRadius.circular(9),
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(9),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-          child: Text(label, style: style),
-        ),
-      ),
     );
   }
 }
